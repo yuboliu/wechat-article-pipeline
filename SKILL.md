@@ -167,6 +167,11 @@ cd ~/.workbuddy/skills/wechat-article-to-markdown
 6. HTML to Markdown conversion via markdownify
 7. Concurrent image downloading
 8. Styled-block headings promoted to `##`
+9. Paragraph first-line indentation stripped — WeChat authors pad paragraphs with
+   `&nbsp;` runs for Chinese indentation, which markdownify + the `\u00a0` cleanup turn
+   into a 4-space indent that Markdown renders as an **indented code block**. Only
+   plain body lines are de-indented (list/quote/heading/table/fence/image lines are
+   left alone), see `_strip_para_indent()`
 
 ## Limitations
 

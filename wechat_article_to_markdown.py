@@ -690,6 +690,35 @@ def process_content(soup: BeautifulSoup) -> tuple[str, list[dict], list[str]]:
     return str(content_el), code_blocks, img_urls
 
 
+LIST_MARK_RE = re.compile(r"^(?:[-*+]\s|\d+[.)]\s)")
+
+
+def _strip_para_indent(md: str) -> str:
+    """去掉「普通段落行」的行首缩进。
+
+    微信作者常用一串 `&nbsp;` 做中文「首行缩进」；上面那步 `\\u00a0 -> 空格` 之后，
+    整个段落就以 4 个空格开头，而 Markdown 把「4 空格缩进」当**缩进代码块** ——
+    Obsidian 里会渲染成灰底等宽块，正文看上去像代码（实测「网络原来如此之G行…」
+    一篇有 30 个段落中招）。
+
+    只处理同时满足的行：不在代码围栏内、行首有空白、去掉空白后不以 Markdown 结构
+    标记开头（列表 / 引用 / 标题 / 表格 / 围栏 / 图片）。这样列表的**续行**
+    （`    - 1.2.1 协议栈`）不受影响。
+    """
+    out, in_fence = [], False
+    for ln in md.split("\n"):
+        if ln.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(ln)
+            continue
+        if not in_fence and re.match(r"[ \t]+\S", ln):
+            core = ln.lstrip(" \t")
+            if not LIST_MARK_RE.match(core) and core[0] not in ">#|!-*+":
+                ln = core
+        out.append(ln)
+    return "\n".join(out)
+
+
 def convert_to_markdown(content_html: str, code_blocks: list[dict]) -> str:
     """HTML -> Markdown，还原代码块，清理格式"""
     md = markdownify.markdownify(
@@ -710,6 +739,8 @@ def convert_to_markdown(content_html: str, code_blocks: list[dict]) -> str:
 
     # 清理 &nbsp; 残留
     md = md.replace("\u00a0", " ")
+    # 去掉段落行首缩进（&nbsp; 首行缩进的残留，会被 Markdown 当成代码块）
+    md = _strip_para_indent(md)
     # 清理多余空行
     md = re.sub(r"\n{4,}", "\n\n\n", md)
     # 清理行尾多余空格

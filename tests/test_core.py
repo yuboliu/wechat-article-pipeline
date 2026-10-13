@@ -2,6 +2,7 @@ import pytest
 from bs4 import BeautifulSoup
 
 from wechat_article_to_markdown import (
+    _strip_para_indent,
     convert_to_markdown,
     extract_publish_time,
     extract_source_url,
@@ -139,3 +140,38 @@ def test_convert_to_markdown_restores_code_block() -> None:
     assert "```python" in md
     assert "print(1)" in md
     assert "CODEBLOCK-PLACEHOLDER-0" not in md
+
+
+# ------------------------------------------------------------------
+# _strip_para_indent  （&nbsp; 首行缩进的残留会被当成缩进代码块）
+# ------------------------------------------------------------------
+
+
+def test_strip_para_indent_removes_plain_paragraph_indent() -> None:
+    md = "    当金融机构的用户发起请求，需要有权威服务器解析。"
+    assert _strip_para_indent(md) == "当金融机构的用户发起请求，需要有权威服务器解析。"
+
+
+def test_strip_para_indent_keeps_markdown_structure_lines() -> None:
+    # 列表续行、引用、标题、表格、图片行都不该被去缩进
+    md = (
+        "    - 1.2.1 协议栈\n"
+        "    > 引用行\n"
+        "    # 标题\n"
+        "    | a | b |\n"
+        "    ![x](y.png)"
+    )
+    assert _strip_para_indent(md) == md
+
+
+def test_strip_para_indent_keeps_fenced_code_content() -> None:
+    md = "```\n    缩进属于代码内容，必须保留\n```"
+    assert _strip_para_indent(md) == md
+
+
+def test_strip_para_indent_end_to_end_via_convert() -> None:
+    # nbsp 首行缩进经 markdownify + \u00a0 清理后不得残留 4 空格缩进
+    html = "<p>&nbsp;&nbsp;&nbsp;&nbsp;正文段落</p>"
+    md = convert_to_markdown(html, [])
+    assert "\n    正文段落" not in md
+    assert "正文段落" in md
