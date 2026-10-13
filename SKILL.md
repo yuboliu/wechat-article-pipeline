@@ -122,20 +122,40 @@ cd ~/.workbuddy/skills/wechat-article-to-markdown
 > ⇒ **本机需要浏览器兜底时请加 `--browser-engine chromium`**。
 > `--browser-timeout`（默认 90s）已做硬超时，不会像旧版那样卡死。
 
-## 小标题层级（样式块提升为 `##`）
+## 小标题层级（样式块 / 编号段 提升为 `##`~`####`）
 
-微信大量文章的章节标题是**样式块**而不是 `<h1-6>`：
+微信文章的章节标题**不是** `<h1-6>`，有两种形态，`process_content()` 各有一套确定性规则：
+
+### 形态 1：样式块（`# 2) 小标题`）
 
 ```html
 <section style="font-size: 17px;font-weight: bold;color: #ff6600;text-align: center">
   <span leaf="">AI推理流量四大核心特征</span></section>
 ```
 
-markdownify 不认识它 → 退化成普通段落 → 笔记整篇没有 `##` 层级。
+判定：内联样式含 `font-weight: bold` 且 `font-size >= 16px`（正文 15px）、纯文本、
+≤40 字、不以 `。！？；：` 收尾 → 提升为 `<h2>`。L1(17px) 与 L2(16px) 统一压成一级 `##`。
 
-`process_content()` 里做了确定性判定（`# 2) 小标题`）：内联样式含 `font-weight: bold`
-且 `font-size >= 16px`（正文 15px）、纯文本、≤40 字、不以 `。！？；：` 收尾 → 提升为
-`<h2>`。L1(17px) 与 L2(16px) 统一压成一级 `##`。
+### 形态 2：整段加粗的 `<p>` + 编号（`# 2b) 编号型小标题`）
+
+```html
+<p style="..."><span style="color:..."><strong>
+  <span style="font-size: 15px;">1.2.1 协议栈</span></strong></span></p>
+```
+
+加粗在**内层** strong/span 上、字号 14~15px、外层是 `<p>` —— 形态 1 一条都抓不到。
+典型症状：整篇只有 H1、一个 `##` 都没有（「容器云平台网络架构」就是如此）。
+
+判定：`<p>` 内文字**整段加粗**（`is_fully_bold()`，逐段文字回溯祖先，防「**加粗**+普通文字」
+的强调句）+ 文本以编号开头（`1` / `1.1` / `1.2.1`，**编号后必须有分隔符**，避免把
+「802.1Q标准」当标题）→ 按点号层数提升为 `<h2>` / `<h3>` / `<h4>`。
+
+> ⚠️ **只认 `<p>`，不认 `<section>`**：目录块（「目录」下面那一串）就是一堆并列的
+> `<section>`，认了会把目录项也变成标题、把大纲污染成两套。
+
+> 无编号的加粗小标题（`**需求分析**`、`**Underlay网络**`）**不在本 skill 处理** ——
+> 没有编号就无法判断层级，统一交给 `wechat-to-obsidian-sync` 的
+> `rebuild_headings()` 按上下文定级（见该 skill 的 pitfalls #24）。
 
 ## Features
 

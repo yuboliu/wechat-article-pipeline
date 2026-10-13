@@ -560,6 +560,34 @@ def extract_metadata(soup: BeautifulSoup, html: str) -> dict:
     }
 
 
+def is_fully_bold(el) -> bool:
+    """元素内的文字是否**全部**落在加粗容器里（`<strong>`/`<b>`/`font-weight:bold` 的 span）。
+
+    注意不能只看「有没有加粗子元素」——「**加粗**+普通文字」的段落也有 strong，
+    但那种段落不是标题。这里逐段文字回溯祖先，要求无一处裸文本。
+    """
+    txt = el.get_text(strip=True)
+    if not txt:
+        return False
+
+    def bolded(node) -> bool:
+        cur = node.parent
+        while cur is not None and cur is not el:
+            name = getattr(cur, "name", None)
+            if name in ("strong", "b"):
+                return True
+            style = (cur.get("style") or "") if hasattr(cur, "get") else ""
+            style = style.replace(" ", "").lower()
+            if "font-weight:bold" in style or "font-weight:700" in style:
+                return True
+            cur = cur.parent
+        return False
+
+    kept = "".join(str(s).strip() for s in el.strings
+                   if str(s).strip() and bolded(s))
+    return kept == txt
+
+
 def process_content(soup: BeautifulSoup) -> tuple[str, list[dict], list[str]]:
     """
     预处理正文 DOM：修复图片、处理代码块、移除噪声元素。
@@ -597,6 +625,28 @@ def process_content(soup: BeautifulSoup) -> tuple[str, list[dict], list[str]]:
         h2 = soup.new_tag("h2")
         h2.string = sec_text
         sec.replace_with(h2)
+
+    # 2b) 编号型小标题：另一类小标题是 `<p><strong><span>1.2.1 协议栈</span></strong></p>`
+    #     —— 加粗在**内层** strong/span 上、字号 14~15px，且外层是 <p> 而不是带样式的
+    #     <section>，上面那条规则一条都抓不到。典型症状：整篇只有 H1，一个 ## 都没有
+    #     （「容器云平台网络架构」就是如此）。
+    #     确定性判定：<p> 内文字**整段加粗** + 文本以编号开头（1 / 1.1 / 1.2.1，
+    #     编号后必须有分隔符，避免把「802.1Q标准」当标题）→ 按点号层数提升为 h2/h3/h4。
+    #     ⚠️ **只认 <p>，不认 <section>**：目录块（「目录」下面那一串）就是一堆 <section>，
+    #     认了会把目录项也变成标题，把大纲污染成两套。
+    for p in content_el.find_all("p"):
+        if p.find(["img", "br", "a", "section", "p", "div", "table", "ul", "ol"]):
+            continue
+        p_text = p.get_text(strip=True)
+        if not p_text or len(p_text) > 40 or p_text[-1] in "。！？；：,!?;":
+            continue
+        num = re.match(r"^(\d+(?:\.\d+)*)[\s、.．:：]+(\S.*)$", p_text)
+        if not num or not is_fully_bold(p):
+            continue
+        level = min(2 + num.group(1).count("."), 6)
+        h = soup.new_tag(f"h{level}")
+        h.string = p_text
+        p.replace_with(h)
 
     # 3) 代码块: 提取 code-snippet__fix 内容，替换为占位符
     code_blocks = []
