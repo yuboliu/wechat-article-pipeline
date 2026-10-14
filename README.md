@@ -13,6 +13,7 @@ Fetch WeChat Official Account articles and convert them to clean Markdown.
 - Download article images to local `images/` and rewrite links
 - Handle WeChat `code-snippet` blocks with language fences
 - Promote WeChat styled-block headings (`<section style="font-weight:bold">`) to `##`
+  (to `##`/`###` when the article uses both the 17px and 16px title sizes)
 
 ## Installation
 
@@ -160,6 +161,7 @@ If not set, workflow falls back to `https://mp.weixin.qq.com/s/Y7dyRC7CJ09miHWU6
 - 下载图片到本地 `images/` 并自动替换链接
 - 处理微信 `code-snippet` 代码块并保留语言标识
 - 把微信样式块小标题（`<section style="font-weight:bold">`）提升为 `##`
+  （同一篇里 17px / 16px 两种字号并存时，按字号分为 `##` / `###` 两级）
 - 把「整段加粗 + 编号」的 `<p>`（`1` / `1.1` / `1.2.1`）提升为 `##`~`####` 多级标题
 
 ## 安装

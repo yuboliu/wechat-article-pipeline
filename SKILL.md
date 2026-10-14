@@ -134,7 +134,16 @@ cd ~/.workbuddy/skills/wechat-article-to-markdown
 ```
 
 判定：内联样式含 `font-weight: bold` 且 `font-size >= 16px`（正文 15px）、纯文本、
-≤40 字、不以 `。！？；：` 收尾 → 提升为 `<h2>`。L1(17px) 与 L2(16px) 统一压成一级 `##`。
+≤40 字、不以 `。！？；：` 收尾 → 提升为标题。
+
+**层级（2026-10-14 改）**：旧版把 L1(17px 橙) 与 L2(16px 蓝) **一律压成一级 `##`**；
+但有的作者是**故意**用两种字号分两级 ——「MIT发布Agent信心指数」那篇章 17px 橙居中、
+节 16px 蓝左对齐，压平后 `从业者心态：效率驱动，担忧并存` 与它下面的
+`效率是第一驱动力` / `两大核心担忧` / `应对策略` 变成同级，**大纲整体塌一层**。
+现在：**只有两档字号并存时才分级**（`>= 17px` → `<h2>`、`16px` → `<h3>`）；
+单字号文章照旧全 `##`（作者本就没打算分两级），且下游 `shift_body_headings()`
+本来就会把「正文最浅一级」归一到 `##`，不受影响。
+同类症状：`思科2026报告深度解读` 的 11 个平铺 `##` 重抓后恢复为 5 个 `##` + 6 个 `###`。
 
 ### 形态 2：整段加粗的 `<p>` + 编号（`# 2b) 编号型小标题`）
 
@@ -166,7 +175,8 @@ cd ~/.workbuddy/skills/wechat-article-to-markdown
 5. WeChat code-snippet extraction and fenced code block output
 6. HTML to Markdown conversion via markdownify
 7. Concurrent image downloading
-8. Styled-block headings promoted to `##`
+8. Styled-block headings promoted to `##` — or to `##`/`###` when the article uses both
+   the 17px and 16px title sizes (a two-level scheme the flat promotion used to erase)
 9. Paragraph first-line indentation stripped — WeChat authors pad paragraphs with
    `&nbsp;` runs for Chinese indentation, which markdownify + the `\u00a0` cleanup turn
    into a 4-space indent that Markdown renders as an **indented code block**. Only

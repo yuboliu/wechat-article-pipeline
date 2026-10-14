@@ -621,8 +621,18 @@ def process_content(soup: BeautifulSoup) -> tuple[str, list[dict], list[str]]:
     #        <span leaf="">AI推理流量四大核心特征</span></section>
     #    markdownify 不认识它，会退化成一行普通段落，落库后整篇没有 ## 层级。
     #    确定性判定：内联样式含 font-weight:bold 且 font-size >= 16px（正文是 15px）、
-    #    纯文本、长度 <= 40 字、不以句末标点收尾 → 提升为 <h2>。
-    #    注意：L1(17px 橙) 与 L2(16px 蓝) 统一压成一级 ##，与既有笔记「H1 + 单层 ##」一致。
+    #    纯文本、长度 <= 40 字、不以句末标点收尾 → 提升为标题。
+    #
+    #    ★ 两级字号（2026-10-14 改）：旧版把 L1(17px 橙) 与 L2(16px 蓝) **一律压成 `##`**，
+    #      理由是「与既有笔记 H1 + 单层 ## 一致」。但有的作者是**故意**用两种字号分两级：
+    #      「MIT发布Agent信心指数」那篇章是 17px 橙居中、节是 16px 蓝左对齐，压平后
+    #      `从业者心态：效率驱动，担忧并存` 与它下面的 `效率是第一驱动力` / `两大核心担忧`
+    #      / `应对策略` 变成同级，大纲整体塌掉一层（且这是**抓取阶段**丢的信息，
+    #      下游 to_obsidian 再聪明也补不回来）。
+    #      改法：**只有两种档位并存时才分级**（>=17px → h2、16px → h3）。
+    #      单字号文章照旧全 `##` —— 那说明作者本就没打算分两级（多数文章如此），
+    #      且下游 `shift_body_headings()` 本来就会把「正文最浅一级」归一到 `##`，不受影响。
+    cands = []
     for sec in content_el.find_all("section"):
         style = (sec.get("style") or "").replace(" ", "").lower()
         if "font-weight:bold" not in style and "font-weight:700" not in style:
@@ -635,9 +645,14 @@ def process_content(soup: BeautifulSoup) -> tuple[str, list[dict], list[str]]:
         sec_text = sec.get_text(strip=True)
         if not sec_text or len(sec_text) > 40 or sec_text[-1] in "。！？；：,!?;":
             continue
-        h2 = soup.new_tag("h2")
-        h2.string = sec_text
-        sec.replace_with(h2)
+        cands.append((sec, sec_text, float(size_m.group(1))))
+    sizes = {s for _, _, s in cands}
+    graded = any(s >= 17 for s in sizes) and any(s < 17 for s in sizes)
+    for sec, sec_text, size in cands:
+        tag = "h3" if (graded and size < 17) else "h2"
+        h = soup.new_tag(tag)
+        h.string = sec_text
+        sec.replace_with(h)
 
     # 2b) 编号型小标题：另一类小标题是 `<p><strong><span>1.2.1 协议栈</span></strong></p>`
     #     —— 加粗在**内层** strong/span 上、字号 14~15px，且外层是 <p> 而不是带样式的

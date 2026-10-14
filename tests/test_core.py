@@ -216,3 +216,64 @@ def test_heading_with_text_and_image_is_unwrapped_too() -> None:
     assert img_urls == ["https://x/y.png"]
     assert "![图](https://x/y.png)" in md
     assert "###" not in md
+
+
+# ------------------------------------------------------------------
+# 样式块小标题的层级：17px / 16px 两级并存时才分级
+# （「MIT发布Agent信心指数」那篇章 17px 橙、节 16px 蓝，旧版一律压成 ##）
+# ------------------------------------------------------------------
+
+
+def test_style_heading_two_sizes_graded_h2_and_h3() -> None:
+    html = (
+        '<div id="js_content">'
+        '<section style="font-size: 17px;font-weight: bold;color: #ff6600;text-align: center">'
+        '<span leaf="">高信心区：什么活适合Agent 干</span></section>'
+        '<p style="font-size: 15px;">正文。</p>'
+        '<section style="font-size: 16px;font-weight: bold;color: #3B82F6;text-align: justify">'
+        '<span leaf="">效率是第一驱动力</span></section>'
+        "</div>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    content_html, _blocks, _imgs = process_content(soup)
+    md = convert_to_markdown(content_html, [])
+
+    assert "## 高信心区：什么活适合Agent 干" in md
+    assert "### 效率是第一驱动力" in md
+
+
+def test_style_heading_single_size_stays_h2() -> None:
+    """只有一种字号（16px）时不分级 —— 多数文章本就只有一层标题。"""
+    html = (
+        '<div id="js_content">'
+        '<section style="font-size: 16px;font-weight: bold">'
+        '<span leaf="">第一章</span></section>'
+        '<p style="font-size: 15px;">正文。</p>'
+        '<section style="font-size: 16px;font-weight: bold">'
+        '<span leaf="">第二章</span></section>'
+        "</div>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    content_html, _blocks, _imgs = process_content(soup)
+    md = convert_to_markdown(content_html, [])
+
+    assert md.count("\n## ") == 2
+    assert "\n### " not in md
+
+
+def test_style_heading_17px_alone_stays_h2() -> None:
+    """全篇只有 17px 一种 → 仍全 `##`（只有「两档并存」才说明作者分了级）。"""
+    html = (
+        '<div id="js_content">'
+        '<section style="font-size: 17px;font-weight: bold">'
+        '<span leaf="">第一章</span></section>'
+        '<section style="font-size: 17px;font-weight: bold">'
+        '<span leaf="">第二章</span></section>'
+        "</div>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    content_html, _blocks, _imgs = process_content(soup)
+    md = convert_to_markdown(content_html, [])
+
+    assert md.count("\n## ") == 2
+    assert "\n### " not in md
