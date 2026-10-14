@@ -603,6 +603,19 @@ def process_content(soup: BeautifulSoup) -> tuple[str, list[dict], list[str]]:
         if data_src:
             img["src"] = data_src
 
+    # 1b) 标题标签里裹着图片 —— **图片会整条丢失**。
+    #     markdownify 的 <hN> 转换只保留 alt 文字，`<h3><img alt="图片"/></h3>`
+    #     会被渲染成 `### 图片`：图没了，还白送一个大纲里的假标题
+    #     （实测「不管你是运维还是开发，微服务这些你得知道!」的 img_001.gif 就是这样
+    #     下载了却从未被引用的）。图片不可能是标题内容 —— 把这类标题拆成普通段落，
+    #     让图片回到正常位置由 markdownify 输出 `![alt](url)`。
+    for h in content_el.find_all(["h1", "h2", "h3", "h4", "h5", "h6"]):
+        if h.find("img"):
+            p = soup.new_tag("p")
+            for child in list(h.children):
+                p.append(child.extract())
+            h.replace_with(p)
+
     # 2) 小标题：微信把章节标题写成样式块，例如
     #      <section style="font-size: 17px;font-weight: bold;color: #ff6600;text-align: center">
     #        <span leaf="">AI推理流量四大核心特征</span></section>

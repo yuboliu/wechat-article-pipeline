@@ -172,6 +172,11 @@ cd ~/.workbuddy/skills/wechat-article-to-markdown
    into a 4-space indent that Markdown renders as an **indented code block**. Only
    plain body lines are de-indented (list/quote/heading/table/fence/image lines are
    left alone), see `_strip_para_indent()`
+10. Headings wrapping an image are unwrapped to paragraphs — markdownify's `<hN>`
+    conversion keeps only the `alt` text, so `<h3><img alt="图片"/></h3>` becomes
+    `### 图片`: **the image is lost** (it gets downloaded but never referenced) and a
+    fake heading shows up in the outline. Images can never be heading content, so such
+    headings are replaced with `<p>` before conversion
 
 ## Limitations
 

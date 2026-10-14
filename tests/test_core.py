@@ -175,3 +175,44 @@ def test_strip_para_indent_end_to_end_via_convert() -> None:
     md = convert_to_markdown(html, [])
     assert "\n    正文段落" not in md
     assert "正文段落" in md
+
+
+# ------------------------------------------------------------------
+# 标题标签里裹着图片  （markdownify 会连图带标签一起丢掉）
+# ------------------------------------------------------------------
+
+
+def test_image_inside_heading_is_not_lost() -> None:
+    """`<h3><img/></h3>` 里的图片必须留下来。
+
+    markdownify 的 `<hN>` 转换只保留 alt 文字，`<h3><img alt="图片"/></h3>` 会被渲染成
+    `### 图片` —— 图没了，还白送一个大纲里的假标题。真实样本：「不管你是运维还是开发，
+    微服务这些你得知道!」的 img_001.gif 就是这样下载了却从未被引用。
+    """
+    html = (
+        '<div id="js_content">'
+        '<h3 style="text-align:center"><span>'
+        '<img data-src="https://mmbiz.qpic.cn/a/640?wx_fmt=gif" alt="图片" /></span></h3>'
+        "<h3><span>一、还是从网站开始</span></h3>"
+        "</div>"
+    )
+    soup = BeautifulSoup(html, "html.parser")
+    content_html, _blocks, img_urls = process_content(soup)
+    md = convert_to_markdown(content_html, [])
+
+    assert img_urls == ["https://mmbiz.qpic.cn/a/640?wx_fmt=gif"]
+    assert "![图片](https://mmbiz.qpic.cn/a/640?wx_fmt=gif)" in md
+    assert "### 图片" not in md
+    # 真标题不受影响
+    assert "### 一、还是从网站开始" in md
+
+
+def test_heading_with_text_and_image_is_unwrapped_too() -> None:
+    html = '<div id="js_content"><h3>示意图<img src="https://x/y.png" alt="图" /></h3></div>'
+    soup = BeautifulSoup(html, "html.parser")
+    content_html, _blocks, img_urls = process_content(soup)
+    md = convert_to_markdown(content_html, [])
+
+    assert img_urls == ["https://x/y.png"]
+    assert "![图](https://x/y.png)" in md
+    assert "###" not in md
