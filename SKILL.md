@@ -1,6 +1,6 @@
 ---
 name: wechat-article-pipeline
-description: "微信公众号文章一体化流水线：抓取（mp.weixin.qq.com → 干净 Markdown）→ 转换（Obsidian 风味：callout 元信息 / ![[图片]] 嵌入 / 多级标题重建 / 文末推广与文首引流截断 / 引号归一化）→ 校验（Tier-1 七项结构体检，退出码可做门禁）→ 落库（vault 内每篇一个子文件夹，只复制正文引用的图片）。当用户给出 mp.weixin.qq.com 链接、说「抓取/保存这篇公众号文章」「同步微信文章到 obsidian / 知识库」「抓完即校验」「校验一下这篇」「微信文章入库」，或需要单独跑其中某一步（抓取 / 转换 / 校验 / 落库）时使用。"
+description: "微信公众号文章一体化流水线：抓取（mp.weixin.qq.com → 干净 Markdown）→ 转换（Obsidian 风格：callout 元信息 / ![[图片]] 嵌入 / 多级标题重建 / 文末推广与文首引流截断 / 引号归一化）→ 校验（Tier-1 七项结构体检，退出码可做门禁）→ 落库（vault 内每篇一个子文件夹，只复制正文引用的图片）。当用户给出 mp.weixin.qq.com 链接、说「抓取/保存这篇公众号文章」「同步微信文章到 obsidian / 知识库」「抓完即校验」「校验一下这篇」「微信文章入库」，或需要单独跑其中某一步（抓取 / 转换 / 校验 / 落库）时使用。"
 agent_created: true
 ---
 
@@ -68,7 +68,7 @@ D="<文章目录名>"                                      # output/ 下的子�
 - 本机 camoufox 二进制无法被自动化驱动（**已完整验证与版本无关，勿再试"换稳定版"**），
   需要浏览器兜底时加 `--browser-engine chromium`。见 `references/fetch-notes.md`。
 
-## 2. 转换（→ Obsidian 风味）
+## 2. 转换（→ Obsidian 风格）
 
 ```bash
 "$PY" scripts/to_obsidian.py "$D" --base "$BASE" --tags 标签1 标签2 --date 2026-09-23

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""wechat_to_md 产物 -> Obsidian 风味 Markdown。
+"""wechat_to_md 产物 -> Obsidian 风格 Markdown。
 
 用法:
   python to_obsidian.py "<文章目录名>" --tags t1 t2 ... [--date YYYY-MM-DD] [--base DIR]

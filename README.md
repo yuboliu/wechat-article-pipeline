@@ -8,8 +8,6 @@
 
 本仓库由三个独立 skill 合并而来：抓取（`wechat-article-to-markdown`）、
 转换 + 落库（`wechat-to-obsidian-sync`）、校验（`wechat-md-verify`）。
-抓取部分 fork 自 [jackwener/wechat-article-to-markdown](https://github.com/jackwener/wechat-article-to-markdown)，
-`upstream` 仍指向它。
 
 ## 它解决什么问题
 

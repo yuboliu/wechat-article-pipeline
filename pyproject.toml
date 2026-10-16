@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wechat-article-pipeline"
 version = "1.0.0"
-description = "微信公众号文章 抓取 → Obsidian 风味转换 → 结构校验 → 落库 的一体化流水线"
+description = "微信公众号文章 抓取 → Obsidian 风格转换 → 结构校验 → 落库 的一体化流水线"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT"
