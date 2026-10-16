@@ -1,26 +1,30 @@
 name: CI
 
 on:
-  workflow_call:
-  pull_request:
   push:
     branches:
       - main
+  pull_request:
+  workflow_dispatch:
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
 
-      - name: Build package
-        run: uv build
-
-      - name: Run tests
-        run: uv run --with pytest pytest -q -m "not e2e"
+      - name: Run tests（抓取器 + 转换器，共 166 项；e2e 需联网/浏览器，跳过）
+        run: python -m pytest tests/ -q -m "not e2e"

@@ -3,3 +3,4 @@ markdownify
 beautifulsoup4
 httpx
 requests
+pyyaml

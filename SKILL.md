@@ -1,194 +1,191 @@
 ---
-name: wechat-article-to-markdown
-description: Fetch WeChat Official Account (微信公众号) articles from mp.weixin.qq.com and convert to Markdown. 微信文章转 Markdown 工具。
-author: jackwener
-version: "1.0.0"
-tags:
-  - wechat
-  - 微信
-  - 微信文章
-  - 公众号
-  - mp.weixin.qq.com
-  - markdown
-  - article
-  - converter
-  - cli
+name: wechat-article-pipeline
+description: "微信公众号文章一体化流水线：抓取（mp.weixin.qq.com → 干净 Markdown）→ 转换（Obsidian 风味：callout 元信息 / ![[图片]] 嵌入 / 多级标题重建 / 文末推广与文首引流截断 / 引号归一化）→ 校验（Tier-1 七项结构体检，退出码可做门禁）→ 落库（vault 内每篇一个子文件夹，只复制正文引用的图片）。当用户给出 mp.weixin.qq.com 链接、说「抓取/保存这篇公众号文章」「同步微信文章到 obsidian / 知识库」「抓完即校验」「校验一下这篇」「微信文章入库」，或需要单独跑其中某一步（抓取 / 转换 / 校验 / 落库）时使用。"
+agent_created: true
 ---
 
-# WeChat Article to Markdown
+# WeChat Article Pipeline（抓取 → 转换 → 校验 → 落库）
 
-Fetch a WeChat Official Account article and convert it to a clean Markdown file.
+把公众号文章变成 Obsidian 里一篇**结构正确、无推广残渣、图片可用**的笔记。
+四个环节在同一条流水线上，也可只用其中一步。
 
-## When to use
+| 步骤 | 脚本 | 输入 → 输出 |
+|------|------|-------------|
+| 1 抓取 | `wechat_article_to_markdown.py` | URL → `<BASE>/<目录名>/<目录名>.md` + `images/` |
+| 2 转换 | `scripts/to_obsidian.py` | 上一步的 `.md` → `<目录名>.obsidian.md` |
+| 3 校验 | `scripts/verify_wechat_md.py` | `.obsidian.md` → 报告 + 退出码（0=PASS / 2=FAIL） |
+| 4 落库 | `scripts/sync_to_vault.py` | `.obsidian.md` → `vault/公众号/<标题>/<标题>.md` + 被引用的图 |
 
-Use this skill when you need to save WeChat articles as Markdown for:
-- Personal archive
-- AI summarization input
-- Knowledge base ingestion
+推荐顺序：**抓取 → 转换 → 校验 → 落库**（高价值文章可在落库后再跑一次校验）。
+校验失败**不要落库** —— 结构缺陷一旦进 vault，后面很难察觉。
 
-## Prerequisites
+## 环境
 
-- Python 3.8+
-
-```bash
-# Install
-uv tool install wechat-article-to-markdown
-# Or: pipx install wechat-article-to-markdown
-```
-
-## Usage
+脚本都在本 skill 目录下，用**自带的 `.venv`** 跑（已装齐依赖）：
 
 ```bash
-wechat-article-to-markdown "<WECHAT_ARTICLE_URL>"
+cd ~/.workbuddy/skills/wechat-article-pipeline      # 或你 clone 的位置
+PY=".venv/Scripts/python.exe"                        # Unix/macOS: .venv/bin/python
+BASE="<输出根目录>"                                   # 不传 --base 时默认 cwd/output
+D="<文章目录名>"                                      # output/ 下的子目录名，常与标题不同
 ```
 
-### Fetch modes（两级抓取）
+依赖（见 `requirements.txt`）：`camoufox[geoip] markdownify beautifulsoup4 httpx requests pyyaml`。
+其中 **只有落库脚本需要 pyyaml**，转换与校验脚本是纯标准库。
 
-默认是**两级策略**：先用 `requests` 直取 HTML（非浏览器模式），只有当响应不是正常
-文章页时才自动升到浏览器模式重抓。
+> ⚠️ **Windows / Git Bash 路径**：别把 `$HOME/...` 展开出来的路径（`/c/Users/...`，MSYS 风格）
+> 当**参数**交给原生 Windows Python —— 会报 `can't open file 'c:\c\Users\...'`。
+> 用上面的 `cd` + **相对路径**，或写成 `C:/Users/...`，或 `cygpath -w "$p"`。
+> （`"$HOME/.../python.exe"` 作*命令*没问题，只有作*参数*才会炸。）
 
-判定"不是正常文章页"的依据（`detect_page_problem()`）：
+## 1. 抓取
 
-- HTTP 401 / 403 / 418 / 429 / 5xx
-- 缺 `#js_content`（正文容器）或 `#activity-name`（标题元素）
-- 响应体异常小（< 20 000 字符）
-- 命中风控特征串（`环境异常`、`完成验证后即可继续访问`、`请在微信客户端打开链接` …）
+`wechat_article_to_markdown.py` 在**仓库根**（与上游 jackwener 的布局一致）。
+默认两级策略：先 `requests` 直取 HTML，只有拿到风控页/验证页时才自动升浏览器重抓。
 
-判定**刻意不看正文关键词**：文章本身可能在讨论"环境异常""访问过于频繁"，按关键词
-判会把正常文章误判成风控页。
-
-| 模式 | 行为 | 适用 |
-| --- | --- | --- |
-| `--mode auto`（默认） | 先 requests；命中风控才升浏览器 | 日常 |
-| `--mode requests` | 只用 requests，异常即失败（最快、省内存） | 批量抓取 |
-| `--mode browser` | 只用浏览器（旧版行为） | 明确知道必须靠渲染 |
-
-`--browser-engine camoufox|chromium`（默认 `camoufox`）选择兜底引擎。
-
-其他参数：
+```bash
+"$PY" wechat_article_to_markdown.py "<URL>" -o "$BASE"
+# 只想走最快的非浏览器模式（公众号正文是服务端渲染的，通常够用）
+"$PY" wechat_article_to_markdown.py "<URL>" -o "$BASE" --mode requests
+```
 
 | 参数 | 说明 |
-| --- | --- |
-| `--cookie "<k=v; k2=v2>"` | 附加 Cookie（需要登录态的受限文章） |
-| `--proxy http://127.0.0.1:7890` | 走代理 |
+|---|---|
+| `--mode auto`（默认）/ `requests` / `browser` | 两级 / 只用 requests（最快）/ 只用浏览器 |
+| `--browser-engine camoufox\|chromium` | 浏览器兜底引擎（默认 camoufox） |
+| `--browser-timeout` | 浏览器整体硬超时（默认 90s） |
+| `--cookie "k=v; k2=v2"` / `--proxy URL` | 受限文章 / 走代理 |
 | `--timeout` / `--retries` | requests 超时与重试（默认 30s / 3 次） |
-| `--browser-timeout` | 浏览器模式整体硬超时（默认 90s），防止引擎卡死时无限等待 |
-| `--save-html raw.html` | 把取回的原始 HTML 另存一份，便于离线复跑 / 排查风控 |
-| `--html-file raw.html` | 直接解析本地 HTML，完全不发网络请求 |
+| `--save-html raw.html` / `--html-file raw.html` | 存原始 HTML / 离线复跑，不发网络请求 |
 
-两种模式**产物逐字节一致**（同一篇文章实测 md5 相同），下游转换/校验/落库零改动。
+- 两种模式**产物逐字节一致**，下游无需改动。
+- 内容已失效（删除/违规/过期）报 `unavailable` 且**不升浏览器**（重试无意义）。
+- 风控判定（`detect_page_problem()`）只认 HTTP 状态码、缺 `#js_content`/`#activity-name`、
+  响应体异常小、风控特征串 —— **刻意不扫正文关键词**，否则讨论风控的文章会被误判。
+- 标题里的章节标题提升：`<section>` 样式块（`font-weight:bold` + `font-size>=16px`）→ 标题，
+  同篇 **17px / 16px 两档并存**时按字号分 `##`/`###`，单字号则一律 `##`；
+  「整段加粗 + 编号」的 `<p>`（`1` / `1.1` / `1.2.1`）→ `##`/`###`/`####`。
+- 本机 camoufox 二进制无法被自动化驱动（**已完整验证与版本无关，勿再试"换稳定版"**），
+  需要浏览器兜底时加 `--browser-engine chromium`。见 `references/fetch-notes.md`。
 
-内容已失效（删除 / 违规 / 过期）时报 `unavailable` 且**不升浏览器** —— 重试无意义。
-
-Input URL format:
-- `https://mp.weixin.qq.com/s/...`
-
-Output files:
-- `<cwd>/output/<article-title>/<article-title>.md`
-- `<cwd>/output/<article-title>/images/*`
-
-## 本机运行方式（本地适配；上游是 `uv tool install` 的全局 CLI）
-
-本机没有全局 `wechat-article-to-markdown` 命令，用户级 skill 是上游仓库的 git clone，
-自带 `.venv`，直接跑源码即可（依赖已装好：camoufox / requests / httpx / markdownify /
-beautifulsoup4 / playwright）。
+## 2. 转换（→ Obsidian 风味）
 
 ```bash
-# 从 skill 目录用「相对路径」调用，跨平台最稳
-cd ~/.workbuddy/skills/wechat-article-to-markdown
-./.venv/Scripts/python.exe wechat_article_to_markdown.py "<URL>" -o "<输出根目录>"
+"$PY" scripts/to_obsidian.py "$D" --base "$BASE" --tags 标签1 标签2 --date 2026-09-23
 ```
 
-只想走最快的非浏览器模式：
+`--tags` **必给**，否则 frontmatter 与文末标签静默为空。
+
+它做的 18 件事（逐条见 `references/pitfalls.md`），核心是：
+
+1. 重建 frontmatter（`created` + `tags`）+ 顶部 `> [!info] 文章信息` callout；
+2. `![](images/x.png)` → `![[images/x.png]]` 且独占一行；
+3. **截断文末推广**：`---` 分隔线 / 文末标记行（关注·二维码·推荐阅读·署名·`点击…阅读原文`·
+   `**END**`…）/ **历史文章导航区**（≥8 条连续 mp 链接的结构判据），多候选取**更靠前者**；
+4. **截断文首引流块**（白皮书连载的「节选自《X》+ 扫码 + 免费获取」）；
+5. 删文首重复标题 banner（含尾巴上的 `***装饰行***`）、把「像段落的假标题」降回正文；
+6. **正文标题层级基准归一**（最浅一级 → `##`，兼容 Word 粘贴型偏浅/偏深两个方向）；
+7. **按编号重建多级标题**（`1`→`##`、`1.1`→`###`、`1.2.1`→`####`）+ 提升整段加粗的标题行；
+8. 折叠「空章标题」；删除单行引流语（「后台+私信/回复…获取…资料/综述」）；
+9. 加粗标记断裂合并、反斜杠残留还原、中文引号成对归一化、目录块重排、行尾清理。
+
+每步命中都会在 stdout 打处理记录，便于复核。
+
+## 3. 校验（落库门禁）
 
 ```bash
-./.venv/Scripts/python.exe wechat_article_to_markdown.py "<URL>" \
-  -o "<输出根目录>" --mode requests
+"$PY" scripts/verify_wechat_md.py "$BASE/$D/$D.obsidian.md"
 ```
 
-> ⚠️ **Windows / Git Bash 注意**：别写成 `SK="$HOME/..."` 再把 `"$SK/xxx.py"` 当参数传给 Python ——
-> `$HOME` 会展开成 `/c/Users/...`（MSYS 风格），而原生 Windows Python 不认这种路径，会报
-> `can't open file 'c:\c\Users\...': [Errno 2] No such file or directory`。
-> 用上面的 `cd` + 相对路径写法，或把路径写成 `C:/Users/...`，或用 `cygpath -w` 转换。
+纯本地、零网络、零第三方依赖。退出码 `0` = PASS（或仅有 WARN），`2` = FAIL。
 
-> ⚠️ **本机 camoufox 二进制无法被自动化驱动**（2026-09-23 定位，勿再重复试"换版本"）。
-> 症状：浏览器进程能起，但 chrome window 初始化不完成，Juggler 15s 后抛
-> `chrome://juggler/content/TargetRegistry.js:227 Error: gBrowser never populated`。
-> 已排除：build 版本（beta.29/beta.30）、playwright 版本（1.60/1.62）、camoufox 封装
-> （原生通道直 launch 同样失败）、沙箱、e10s / 内容沙箱 / WebRender / Skeleton UI。
-> 决定性对照：同一 playwright 驱动**官方 firefox → 1.9s PASS**、**Chromium → PASS**
-> ⇒ 环境正常，问题在 camoufox 二进制侧。
->
-> ⇒ **本机需要浏览器兜底时请加 `--browser-engine chromium`**。
-> `--browser-timeout`（默认 90s）已做硬超时，不会像旧版那样卡死。
+| # | 检查 | 级别 |
+|---|---|---|
+| 1 | CODEBLOCK 占位符残留 | FAIL |
+| 2 | 重复代码块（多个块内容完全相同） | FAIL |
+| 3 | 空 / 截断代码块 | FAIL |
+| 4 | 代码围栏闭合（``` 数量为奇数） | FAIL |
+| 5 | 标题-正文粘连 | WARN |
+| 6 | 残留远程资源（http 图 / `javascript:;`） | WARN |
+| 7 | 图片嵌入 vs 文件（缺失=FAIL，多出=提示） | FAIL / 提示 |
 
-## 小标题层级（样式块 / 编号段 提升为 `##`~`####`）
+- `--strict` 把 WARN 也当 FAIL；`--images` 指定自定义图片目录。
+- ⚠️ 第 5 条的**已知误报**：标题**本身**含 `。！？`（设问式/感叹式标题，
+  如 `## 为什么需要 RSI？…`）会被命中。规则**有意偏保守**，判成 WARN 人工过目即可，
+  **不要为它收紧规则**。见 `references/verify_sop.md`。
+- Tier-1 只证明「结构完整」，证明不了「内容对不对」。需要联网对照原文时（代码密集 /
+  报出重复块 / 关键内容是截图 / 高价值文章）按 `references/verify_sop.md` 升级 Tier-2。
 
-微信文章的章节标题**不是** `<h1-6>`，有两种形态，`process_content()` 各有一套确定性规则：
+## 4. 落库
 
-### 形态 1：样式块（`# 2) 小标题`）
-
-```html
-<section style="font-size: 17px;font-weight: bold;color: #ff6600;text-align: center">
-  <span leaf="">AI推理流量四大核心特征</span></section>
+```bash
+"$PY" scripts/sync_to_vault.py "$D" --base "$BASE"
 ```
 
-判定：内联样式含 `font-weight: bold` 且 `font-size >= 16px`（正文 15px）、纯文本、
-≤40 字、不以 `。！？；：` 收尾 → 提升为标题。
+- 落点 `vault/<subfolder>/<标题>/<标题>.md`，默认 `subfolder=公众号`（`--folder` 可覆盖）。
+  **每篇必须是带标题的独立子文件夹**，否则同名 `img_000.png` 互相覆盖。
+- 只复制正文**真正引用**的图片；推广图/二维码留在 output 不落库。
+- vault 路径解析优先级：环境变量 `WECHAT_VAULT` → `scripts/local_config.py` 的 `DEFAULT_VAULT`
+  → 中性默认 `~/iNote`。**换 vault 只改 `local_config.py`**（已 gitignore），
+  不要把绝对路径写回脚本 —— 那会让 `git pull` 冲突，push 还会公开本机路径。
 
-**层级（2026-10-14 改）**：旧版把 L1(17px 橙) 与 L2(16px 蓝) **一律压成一级 `##`**；
-但有的作者是**故意**用两种字号分两级 ——「MIT发布Agent信心指数」那篇章 17px 橙居中、
-节 16px 蓝左对齐，压平后 `从业者心态：效率驱动，担忧并存` 与它下面的
-`效率是第一驱动力` / `两大核心担忧` / `应对策略` 变成同级，**大纲整体塌一层**。
-现在：**只有两档字号并存时才分级**（`>= 17px` → `<h2>`、`16px` → `<h3>`）；
-单字号文章照旧全 `##`（作者本就没打算分两级），且下游 `shift_body_headings()`
-本来就会把「正文最浅一级」归一到 `##`，不受影响。
-同类症状：`思科2026报告深度解读` 的 11 个平铺 `##` 重抓后恢复为 5 个 `##` + 6 个 `###`。
+> ⚠️ 落库是 `open(..., "w")` **覆盖写**。目标已存在同名笔记时（公众号常把旧文**再发版**，
+> 落库路径相同就会直接覆盖），**先停下来问用户**，不要自动跑。判重方法：比对 vault 里同名
+> 笔记的「来源 URL / 发布日期 / 作者」，再用 difflib 归一化正文算相似度。
 
-### 形态 2：整段加粗的 `<p>` + 编号（`# 2b) 编号型小标题`）
+## 目录结构
 
-```html
-<p style="..."><span style="color:..."><strong>
-  <span style="font-size: 15px;">1.2.1 协议栈</span></strong></span></p>
+```text
+wechat-article-pipeline/
+├── wechat_article_to_markdown.py    # 抓取（留在根目录，与上游路径对齐）
+├── conftest.py                      # 让两套测试都能 import 到被测模块
+├── scripts/
+│   ├── to_obsidian.py               # 转换（纯标准库）
+│   ├── sync_to_vault.py             # 落库（需 pyyaml）
+│   ├── verify_wechat_md.py          # Tier-1 校验（纯标准库）
+│   └── local_config.py              # ★本机专用，已 gitignore（vault 根）
+├── references/
+│   ├── pitfalls.md                  # 41 条踩坑记录（动手改脚本前必读）
+│   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
+│   ├── fetch-notes.md               # 抓取器本机注意（camoufox 结论等）
+│   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
+│   ├── to_obsidian.local.diff       # 同上，逐条 diff
+│   └── LOCAL-NOTES.md               # ★本机专用，已 gitignore
+├── tests/
+│   ├── test_core.py test_fetch.py       # 抓取器（pytest）
+│   ├── test_e2e_live.py                 # 联网 e2e（默认跳过）
+│   └── convert/                         # 转换器（unittest 风格）
+└── .github/workflows/ci.yml
 ```
 
-加粗在**内层** strong/span 上、字号 14~15px、外层是 `<p>` —— 形态 1 一条都抓不到。
-典型症状：整篇只有 H1、一个 `##` 都没有（「容器云平台网络架构」就是如此）。
+## 测试与回归
 
-判定：`<p>` 内文字**整段加粗**（`is_fully_bold()`，逐段文字回溯祖先，防「**加粗**+普通文字」
-的强调句）+ 文本以编号开头（`1` / `1.1` / `1.2.1`，**编号后必须有分隔符**，避免把
-「802.1Q标准」当标题）→ 按点号层数提升为 `<h2>` / `<h3>` / `<h4>`。
+```bash
+"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 166 项（抓取 58 + 转换 108），无需网络
+"$PY" -m pytest tests/ -q -m e2e              # 联网 e2e（需浏览器运行时）
+"$PY" -m unittest discover -s tests/convert -v # 只跑转换器那 108 项（原命令习惯）
+```
 
-> ⚠️ **只认 `<p>`，不认 `<section>`**：目录块（「目录」下面那一串）就是一堆并列的
-> `<section>`，认了会把目录项也变成标题、把大纲污染成两套。
+- 抓取器那套是 **pytest**，转换器那套是 **unittest**；`conftest.py` 已把仓库根与 `scripts/`
+  插进 `sys.path`，所以 pytest 一条命令能同时收集两套。
+- ⭐ **改动标题 / 推广规则的硬性回归**：除单测外，还要拿 vault 里**全部已落库成品**跑一遍，
+  确认新规则零命中（假阳性回归）。更严格的做法是
+  `git show HEAD:<旧脚本>` 导出旧版、新旧各跑同一批文章、两两 diff —— 这样才能把
+  「本次改动的影响」与「上一批规则留下的差异」分开。只跟 vault 现存成品比是分不清的。
 
-> 无编号的加粗小标题（`**需求分析**`、`**Underlay网络**`）**不在本 skill 处理** ——
-> 没有编号就无法判断层级，统一交给 `wechat-to-obsidian-sync` 的
-> `rebuild_headings()` 按上下文定级（见该 skill 的 pitfalls #24）。
+## 硬性约定
 
-## Features
+- 改 skill / 覆盖文件前先备份到项目内 `.workbuddy/archive/<日期>-<主题>/`。
+- 本机绝对路径（vault、解释器）一律不进受版本管理的文件，只放 `local_config.py` /
+  `references/LOCAL-NOTES.md`（都已 gitignore）。
+- 判断两个副本有没有差异前**先排除行尾**（`diff --strip-trailing-cr`、`git ls-files --eol`）——
+  本机 `core.autocrlf=true`，仓库带 `.gitattributes`（`* text=auto eol=lf`），工作区是 LF。
+- 风格规则以本 skill 的脚本为准；Obsidian 语法含义查 `obsidian-markdown`。
 
-1. Two-tier fetching: plain HTTP (`requests`) first, browser only when blocked
-2. Browser fallback via Camoufox (anti-detection) or Chromium
-3. Metadata extraction (title, account name, publish time, source URL)
-4. Image localization to local files
-5. WeChat code-snippet extraction and fenced code block output
-6. HTML to Markdown conversion via markdownify
-7. Concurrent image downloading
-8. Styled-block headings promoted to `##` — or to `##`/`###` when the article uses both
-   the 17px and 16px title sizes (a two-level scheme the flat promotion used to erase)
-9. Paragraph first-line indentation stripped — WeChat authors pad paragraphs with
-   `&nbsp;` runs for Chinese indentation, which markdownify + the `\u00a0` cleanup turn
-   into a 4-space indent that Markdown renders as an **indented code block**. Only
-   plain body lines are de-indented (list/quote/heading/table/fence/image lines are
-   left alone), see `_strip_para_indent()`
-10. Headings wrapping an image are unwrapped to paragraphs — markdownify's `<hN>`
-    conversion keeps only the `alt` text, so `<h3><img alt="图片"/></h3>` becomes
-    `### 图片`: **the image is lost** (it gets downloaded but never referenced) and a
-    fake heading shows up in the outline. Images can never be heading content, so such
-    headings are replaced with `<p>` before conversion
+## 出处
 
-## Limitations
-
-- Some code snippets are image/SVG rendered and cannot be extracted as source code
-- Public `mp.weixin.qq.com` URL is required
+- **抓取器**：fork 自 [jackwener/wechat-article-to-markdown](https://github.com/jackwener/wechat-article-to-markdown)，
+  本仓库在其基础上做了两级抓取重构、样式块字号分级、标题内图片解包等改造（`upstream` 仍指向它）。
+- **转换 / 落库 / 校验**：自研，演化自 2026-07 起在本地项目「微信公众号知识库」中迭代的脚本。
+- `scripts/sync_to_vault.py` 的 `format_frontmatter()` / `create_note()` 两个函数内联自
+  skillhub.cn 的 `obsidian-direct`（作者 ruslanlanket），行为保持等价 —— 详见 `README.md`。

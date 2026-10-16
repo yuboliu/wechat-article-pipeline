@@ -1,0 +1,195 @@
+--- to_obsidian.orig-184.py	2026-09-23 15:26:39.858768000 +0800
++++ ~/.workbuddy/skills/wechat-to-obsidian-sync/scripts/to_obsidian.py	2026-09-23 15:46:14.235944700 +0800
+@@ -15,6 +15,11 @@
+   5. 删除引流语 / 投稿 / 点赞引导等残留
+   6. 中文引号按行成对归一化为 “ ”
+   7. 章节 ### -> ##（配合 H1 标题）
++
++抓取产物有两种形态，脚本都吃：
++  A. 自带 YAML frontmatter（title/tags/date/source…）——元信息取自 frontmatter
++  B. 无 frontmatter，元信息在正文开头的 `> 公众号: x / > 发布时间: y / > 原文链接: z` 引用块里
++     ——由 read_quote_meta() 兜底提取，并把该引用块与正文自带的一级标题剥掉
+ """
+ import argparse
+ import datetime
+@@ -38,6 +43,88 @@
+     return fm, text[m.end():]
+ 
+ 
++# 抓取器把元信息写成中文键，这里映射到内部字段名
++QUOTE_KEYS = {
++    "公众号": "author",
++    "作者": "author",
++    "发布时间": "date",
++    "发布日期": "date",
++    "原文链接": "source",
++    "来源": "source",
++    "摘要": "description",
++}
++
++
++def read_quote_meta(text):
++    """形态 B 的兜底：摘掉「正文自带的一级标题 + 后面的 `> key: value` 引用块」。
++
++    返回 (meta, h1, rest)。引用块一行都没认出来时原样返回，避免误删正文引言。
++    """
++    lines = text.split("\n")
++    i = 0
++    while i < len(lines) and not lines[i].strip():
++        i += 1
++    h1 = ""
++    if i < len(lines) and re.match(r"^#\s+", lines[i]):
++        h1 = lines[i].lstrip("#").strip()
++        i += 1
++        while i < len(lines) and not lines[i].strip():
++            i += 1
++
++    meta, j = {}, i
++    while j < len(lines) and lines[j].lstrip().startswith(">"):
++        m = re.match(
++            r"^>\s*(?:\*\*)?([^:：*\s]+)(?:\*\*)?\s*[:：]\s*(.+?)\s*$",
++            lines[j].lstrip(),
++        )
++        if not m or m.group(1).strip() not in QUOTE_KEYS:
++            break
++        meta.setdefault(QUOTE_KEYS[m.group(1).strip()], m.group(2).strip())
++        j += 1
++
++    if not meta:
++        return {}, h1, "\n".join(lines) if h1 else text
++    return meta, h1, "\n".join(lines[j:])
++
++
++def fence_map(lines):
++    """每行是否位于 ``` 代码围栏内部。"""
++    flags, inside = [], False
++    for ln in lines:
++        if ln.lstrip().startswith("```"):
++            flags.append(inside)
++            inside = not inside
++        else:
++            flags.append(inside)
++    return flags
++
++
++def find_promo_sep(text):
++    """从后往前找「文末推广分隔线」，返回截断点（字符下标），找不到返回 -1。
++
++    两个坑：
++      1. 代码块里常有 `---`（DOT 图、表格分隔），旧版 `text.rfind("\\n---\\n")` 会
++         把它当成推广分隔线，把正文从中间腰斩 —— 故跳过围栏内的 `---`。
++      2. 形态 B 的抓取产物在正文最前面就有一条 `---`（元信息引用块之后的分隔线），
++         它后面还跟着整篇正文 —— 真正推广尾巴不会占正文的一大半，故按「尾巴比例」过滤。
++    """
++    lines = text.split("\n")
++    flags = fence_map(lines)
++    total = len(text)
++    offset = 0
++    starts = []
++    for ln in lines:
++        starts.append(offset)
++        offset += len(ln) + 1
++    for i in range(len(lines) - 1, -1, -1):
++        if lines[i].strip() != "---" or flags[i]:
++            continue
++        tail = total - starts[i]
++        if tail <= 0.40 * total:
++            return starts[i]
++    return -1
++
++
+ QUOTES = "“”"
+ 
+ 
+@@ -52,6 +139,44 @@
+     return "".join(out)
+ 
+ 
++GLUE_RE = re.compile(r"[\u4e00-\u9fa5]\s+[A-Za-z]")
++IMG_ALT_RE = re.compile(r"^Image(?=\S)")
++
++
++def fix_heading_lines(lines):
++    """修标题行，两件事：
++
++    1. 去掉抓取器残留的 `Image` alt 前缀（`## Image结论：…` -> `## 结论：…`）。
++       `!\\[Image\\](url)` 的方括号与链接被剥掉后只剩这个词，会让标题带上脏前缀。
++    2. 拆分「标题里塞进了正文句子」的行 —— 断点取「汉字 + 空格 + 拉丁字母」
++       （正文常以英文术语开头），但切出来的正文必须是完整句子（含 `。`）。
++       没有这道闸门，`范围 vs 精度：…？`、`徐文辉    S068…` 这类正常标题会被误拆。
++
++    代码围栏内的 `# 创建 Skill` 是文章里的示例代码，必须原样保留。
++    """
++    out, inside = [], False
++    for ln in lines:
++        if ln.lstrip().startswith("```"):
++            inside = not inside
++            out.append(ln)
++            continue
++        m = None if inside else re.match(r"^(#{1,6})\s+(.*)$", ln)
++        if m:
++            text = IMG_ALT_RE.sub("", m.group(2))
++            hit = GLUE_RE.search(text)
++            if hit and "。" in text[hit.end():]:
++                cut = hit.start() + 1
++                head, body = text[:cut].rstrip(), text[cut:].strip()
++                if head and body:
++                    out.extend(["%s %s" % (m.group(1), head), "", body])
++                    continue
++            if text != m.group(2):
++                out.append("%s %s" % (m.group(1), text))
++                continue
++        out.append(ln)
++    return out
++
++
+ def convert(dir_name, base, tags, date_override=None):
+     art_dir = os.path.join(base, dir_name)
+     src = os.path.join(art_dir, dir_name + ".md")
+@@ -62,13 +187,18 @@
+         text = f.read()
+ 
+     fm, text = read_fm(text)
+-    title = fm.get("title") or dir_name
+-    author = fm.get("author", "")
+-    pubdate = date_override or fm.get("date") or ""
+-    source = fm.get("source", "")
++    quote_meta, raw_h1, text = read_quote_meta(text)
++    if quote_meta:
++        notes.append("从正文引用块兜底提取元信息：" + "、".join(sorted(quote_meta)))
++
++    title = fm.get("title") or raw_h1 or dir_name
++    title = IMG_ALT_RE.sub("", re.sub(r"!\[[^\]]*\]\([^)]*\)", "", title)).strip() or dir_name
++    author = fm.get("author") or quote_meta.get("author", "")
++    pubdate = date_override or fm.get("date") or quote_meta.get("date") or ""
++    source = fm.get("source") or quote_meta.get("source", "")
+ 
+-    # 尾部推广截断
+-    idx = text.rfind("\n---\n")
++    # 尾部推广截断（围栏感知 + 尾巴比例过滤）
++    idx = find_promo_sep(text)
+     if idx != -1:
+         notes.append("截断尾部推广 %d 字符" % (len(text) - idx))
+         text = text[:idx]
+@@ -80,6 +210,8 @@
+         (r'^“?[\w\u4e00-\u9fa5]+”?公众号诚邀.*$', "投稿邀请"),
+         (r"^(近期好文|相关阅读|推荐阅读)：\s*$", "推荐阅读"),
+         (r"^!\[[^\]]*\]\(images/[^)]*\)“?点赞.*$", "点赞引导"),
++        (r"^.*后台私信.*(?:获取|领取|下载).*(?:原文|报告|文件|资料|PDF).*$", "『后台私信获取原文』引导"),
++        (r"^#{1,6}\s*[^\n]*拓展阅读[^\n]*$", "『拓展阅读』导航条"),
+     ]
+     for pat, label in kill:
+         if re.search(pat, text, flags=re.MULTILINE):
+@@ -140,6 +272,12 @@
+     # 章节层级
+     text = re.sub(r"^###\s+", "## ", text, flags=re.MULTILINE)
+ 
++    # 标题-正文粘连拆分
++    fixed = fix_heading_lines(text.split("\n"))
++    if fixed != text.split("\n"):
++        notes.append("拆分粘连的标题-正文")
++        text = "\n".join(fixed)
++
+     # 全文清理
+     text = text.replace("\u200b", "")
+     text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)

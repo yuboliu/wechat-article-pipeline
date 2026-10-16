@@ -1,7 +1,28 @@
-output/
-debug.html
-*.log
-.DS_Store
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# 虚拟环境
 .venv/
+venv/
+
+# 运行产物（本地抓取/转换输出，不入库）
+output/
+*.obsidian.md
+debug.html
+*.html
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# 本机专用（各人机器上的 vault 路径 / 解释器，不入库）
+scripts/local_config.py
+references/LOCAL-NOTES.md
