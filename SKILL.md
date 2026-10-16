@@ -122,7 +122,8 @@ D="<文章目录名>"                                      # output/ 下的子�
 "$PY" scripts/sync_to_vault.py "$D" --base "$BASE"
 ```
 
-- 落点 `vault/<subfolder>/<标题>/<标题>.md`，默认 `subfolder=公众号`（`--folder` 可覆盖）。
+- 落点 `vault/<subfolder>/<标题>/<标题>.md`；`--subfolder` 改中间那级（默认 `公众号`），
+  `--folder` 直接指定最终子目录（默认 `<subfolder>/<标题>`）。
   **每篇必须是带标题的独立子文件夹**，否则同名 `img_000.png` 互相覆盖。
 - 只复制正文**真正引用**的图片；推广图/二维码留在 output 不落库。
 - vault 路径解析优先级：环境变量 `WECHAT_VAULT` → `scripts/local_config.py` 的 `DEFAULT_VAULT`

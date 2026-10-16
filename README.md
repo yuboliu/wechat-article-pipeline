@@ -106,6 +106,8 @@ D="<文章目录名>"
 
 # 4) 落库
 "$PY" scripts/sync_to_vault.py "$D" --base "$BASE"
+#    落点 vault/<subfolder>/<标题>/<标题>.md：
+#    --subfolder 改中间那级（默认「公众号」）、--folder 直接指定最终子目录
 ```
 
 ### 抓取参数
