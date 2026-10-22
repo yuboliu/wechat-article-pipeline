@@ -306,3 +306,35 @@ def test_browser_fetch_honours_timeout(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="未返回"):
         asyncio.run(fetch_html(URL, browser_timeout=0.05))
+
+
+# ------------------------------------------------------------------
+# replace_image_urls
+# ------------------------------------------------------------------
+
+REMOTE = "https://mmbiz.qpic.cn/mmbiz_png/abc/640?wx_fmt=png&from=appmsg"
+
+
+def test_replace_image_urls_basic() -> None:
+    md = f"![]({REMOTE})"
+    assert wtm.replace_image_urls(md, {REMOTE: "images/img_001.png"}) == (
+        "![](images/img_001.png)"
+    )
+
+
+def test_replace_image_urls_with_title() -> None:
+    """markdownify 对带 title 的 <img> 会输出 `![](url "undefined")`。
+
+    旧正则只认 `![](url)`，遇到 title 就匹配不上 —— 图已经下载到本地，正文里却
+    留着 mmbiz 远程地址（校验报「残留远程资源」）。
+    """
+    md = f'![]({REMOTE} "undefined")'
+    out = wtm.replace_image_urls(md, {REMOTE: "images/img_005.png"})
+    assert out == "![](images/img_005.png)"
+    assert "mmbiz.qpic.cn" not in out
+
+
+def test_replace_image_urls_keeps_alt_text() -> None:
+    md = f"![架构图]({REMOTE})"
+    out = wtm.replace_image_urls(md, {REMOTE: "images/img_005.png"})
+    assert out == "![架构图](images/img_005.png)"

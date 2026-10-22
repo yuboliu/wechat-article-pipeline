@@ -427,6 +427,41 @@ def _banner_deco(s):
     return len(body) <= 20 and not re.search(r"[。！？；：,.;:!?]", body)
 
 
+# 被**换行拆开的加粗**：`**前半` …（空行）… `后半**`。
+# 微信编辑器按断行切段时会把一对 `**` 拆到两个段落里，于是
+#   `**浅谈网络安全纵深防御体系之`（未闭合）+ 空行 + `自动封禁能力建设实践**`
+# 两条都不满足「整行加粗」，`_banner_bold()` 双双返回 None → banner 整个留下来。
+# 判据：本行是「`**` + 非星号文本」且**没有**收尾 `**`；向后最多跨 SPLIT_BOLD_MAX_LINES
+# 行（空行不算）找「以 `**` 结尾」的那行，中间各行原样拼起来。
+UNCLOSED_BOLD_RE = re.compile(r"^\*\*([^*\n]+)$")
+CLOSING_BOLD_RE = re.compile(r"^([^*\n]*?)\*\*$")
+SPLIT_BOLD_MAX_LINES = 4
+
+
+def _banner_split_bold(lines, j):
+    """跨行拼出被拆开的加粗块，返回 (文字, 结束行下标)；不成形返回 None。"""
+    m = UNCLOSED_BOLD_RE.match(IMG_INLINE_RE.sub("", lines[j].strip()).strip())
+    if not m:
+        return None
+    buf = [m.group(1)]
+    k, scanned = j + 1, 0
+    while k < len(lines) and scanned <= SPLIT_BOLD_MAX_LINES:
+        s = lines[k].strip()
+        if not s:
+            k += 1
+            continue
+        scanned += 1
+        end = CLOSING_BOLD_RE.match(s)
+        if end:
+            buf.append(end.group(1))
+            return "".join(buf).strip(), k
+        if s.startswith("**") or IMG_INLINE_RE.sub("", s).startswith("#"):
+            return None          # 又开了新加粗 / 撞到标题 —— 不是同一个被拆的块
+        buf.append(s)
+        k += 1
+    return None
+
+
 def strip_dup_title_head(text, title):
     """删掉文首「重复标题」banner，返回处理后的文本。
 
@@ -469,10 +504,24 @@ def strip_dup_title_head(text, title):
             continue
         b = _banner_bold(s)
         if b is None:
-            break           # 遇到正文，收工
+            # 被换行拆开的加粗（`**前半` + 空行 + `后半**`）也算 banner 的一块
+            split = _banner_split_bold(lines, j)
+            if split is None:
+                break           # 遇到正文，收工
+            b, j = split        # j 指向收尾 `**` 所在行
         collected.append(b)
         last = j
         j += 1
+        # ★ 拼到**恰好等于标题**就收手。
+        # 旧版是一路收到底再比对，只要 banner 后面紧跟别的加粗行（本行正文常以
+        # `**引言**` / `**概述**` 开头），拼出来就多一截、整体判定失败 → 整个 banner
+        # 留在笔记里（实测「浅谈网络安全纵深防御体系之自动封禁能力建设实践」）。
+        # 改成前缀式：拼歪了（不再等于 want 的前缀）就立刻放弃，一个字都不动。
+        joined = re.sub(r"\s+", "", "".join(collected))
+        if joined == want:
+            break
+        if not want.startswith(joined):
+            return text
 
     if not collected or last < 0:
         return text
@@ -498,16 +547,23 @@ BOLD_ONLY_RE = re.compile(r"^\*\*(.+?)\*\*$")
 # 正文当标题（它后面跟的是拉丁字母 Q）。
 HEAD_DOT_RE = re.compile(
     r"^(\d+(?:\.\d+)+)(?:[\s、.．:：]\s*|(?=[\u4e00-\u9fa5]))(\S.*)$")
-# `1. 小节名` —— 单数字 + 点号。
+# `1. 小节名` / `1.小节名` —— 单数字 + 点号。
 # 默认按「点号数 + 2」定为层级 3（`1. SSL 卸载` 是节）。
 # 为什么要点号：「容器云」的章节写 `1 容器平台网络模型`（无点，顶级 ##），
 # 「F5」的小节写 `1. SSL 卸载`（有点，###）。同一篇文章里两种写法并存时，
 # 点号是唯一能区分「章 / 节」的信号。
-# 限定 [1-9] 开头 + 点后必须有空格：`01.` / `1.协议栈` 这类少见写法交给原规则，
-# 免得抢走「01 安全问题」这种两位编号（那是「跟着上一级」的小节，口径不同）。
+# 限定 [1-9] 开头：`01.` 这类少见写法交给原规则，免得抢走「01 安全问题」
+# 这种两位编号（那是「跟着上一级」的小节，口径不同）。
+# ⚠️ 点号后的空格**可有可无**（2026-10-22 改）。旧版写死 `\.\s+`，于是同一篇文章
+#    里 `## 1. 建设背景`（有点+空格 → dot1 → ###）和 `## 1.高效性实践`（有点无空格
+#    → 落到 HEAD_INT_RE 的 int → ##）**算出两个层级**，大纲直接从 PART 03 起塌掉。
+#    作者混用两种写法是常态，不能靠空格区分章/节。
+# ⚠️ 但去空格后必须补一道 `(?!\d)`：否则 `802.1Q标准` 会被读成「编号 802 + 标题 1Q标准」
+#    （单测 test_numbering_kinds 就是为它写的）。`1.2.1 协议栈` 不受影响 —— 它被上面的
+#    HEAD_DOT_RE 先接走了。
 # ⚠️ 但**同一套写法在别的文章里含义相反**（见 classify_head_number 的 multi_dot）：
 # 「知识图谱RAG」把章写成 `1. 引言` / `2. RAG 知识库`，节写成 `2.1. 知识库概述`。
-HEAD_DOT1_RE = re.compile(r"^([1-9]\d*)\.\s+(\S.*)$")
+HEAD_DOT1_RE = re.compile(r"^([1-9]\d*)\.(?!\d)\s*(\S.*)$")
 HEAD_INT_RE = re.compile(r"^(\d+)[\s、.．:：](?!\d)\s*(\S.*)$")
 # 两位编号且**不带**分隔符：`01安全问题`（公众号常见的「小节」写法）
 HEAD_TWO_RE = re.compile(r"^(\d{2})\s*(\D.*)$")
@@ -600,10 +656,18 @@ def bold_can_be_head(txt):
 
     长度 ≤ 40 字、不含句号、结尾不是句末标点（尤其 `：` —— 「应重点考虑以下技术建议：」
     这类引导句就是被它挡下来的）、不以「图/表/注」开头（图注）。
+
+    ⚠️ 例外：**带编号**的加粗行，结尾的冒号是作者写小标题的习惯，不是引导句
+    （`**1.事前策略预配置与仿真测试：**`）。判定用 `classify_head_number()`，
+    只有认得出编号（`1.` / `1.2` / `01`）才放行 —— 无编号的加粗句一律按原规则挡掉。
     """
     if not txt or len(txt) > HEAD_MAX_LEN:
         return False
-    if "。" in txt or txt[-1] in HEAD_STOP_PUNCT:
+    if "。" in txt:
+        return False
+    if txt[-1] in "：:" and classify_head_number(txt)[0] != "plain":
+        return True
+    if txt[-1] in HEAD_STOP_PUNCT:
         return False
     return not txt.startswith(HEAD_SKIP_PREFIX)
 
@@ -627,6 +691,11 @@ TRAIL_PUNCT_RE = re.compile(r"[。.；;]\s*$")
 #       （`**（1）朴素 RAG…**` / `**（2）进阶RAG…**` / `**（3）模块化 RAG…**`），
 #       它们曾被提升成 `##`，把 `2.3` 挤成了三段的「子节」。
 BOLD_LIST_ITEM_RE = re.compile(r"^(?:\d+[.．](?!\d)\S|[（(]\d{1,2}[）)])")
+# 标题行（HTML 已经是 `<hN>`）里的「括号编号」才当列表项处理：`## （1）…`。
+# ⚠️ 刻意**不含** `1.xxx` —— `## 1.自动封禁体系高效性目标建设实践` 是真标题。
+#    旧版对**标题行**也用 BOLD_LIST_ITEM_RE，命中后「保留原级」，于是与同篇的
+#    `## 1. 自动封禁体系建设背景`（走 dot1 → ###）算出两种层级（2026-10-22 实测）。
+HEAD_BRACKET_ITEM_RE = re.compile(r"^[（(]\d{1,2}[）)]")
 
 
 def unwrap_bold_head(txt):
@@ -641,6 +710,53 @@ def unwrap_bold_head(txt):
     """
     m = BOLD_ONLY_RE.match(txt)
     return m.group(1).strip() if m else txt
+
+
+# ===== 加粗标记粘连（≥4 颗星号）=====
+# 微信编辑器会把 `**` 叠成 4 颗、8 颗，常见于三种形态（实测「浅谈网络安全纵深防御
+# 体系之自动封禁能力建设实践」一篇同时出现三种）：
+#   `- ****外部攻击告警量大，告警疲劳导致人工处置效率低下****`   ← 首尾各 4 颗
+#   `- ****高效性****：针对海量告警数据…`                        ← 中间 4 颗
+#   `- ****精准性********：****自动封禁效率远超人工处置…`        ← 中间 8 颗 + 4 颗
+# Markdown 里 3 颗以上没有额外含义（`***` = 粗+斜），4+ 一律是拼接事故。
+LONG_BOLD_RUN_RE = re.compile(r"\*{4,}")
+LIST_ITEM_RE = re.compile(r"^\s*[-*+]\s+")
+PURE_STARS_RE = re.compile(r"^\s*\*+\s*$")
+BOLD_DELIM_RE = re.compile(r"\*\*")
+
+
+def normalize_bold_runs(text, notes):
+    """把「≥4 颗星号」的加粗粘连归一成 `**`，并让列表项的加粗成对。
+
+    只动两类行，避免误伤正文里的正常强调：
+      * 列表项（`- ` / `* ` / `+ ` 开头）；
+      * 非空、且以 `****` 开头的行（`****PART****03****` 那种整行粘连）。
+
+    纯星号行（`***` / `****` 当水平分割线用）**不碰** —— 那是合法 HR，改成 `**`
+    会留下一行光秃秃的星号。
+
+    归一后若该**列表项**的 `**` 个数为奇数，去掉最后一个 —— 形如
+    `**精准性**：**自动封禁…（后面没闭合）`，留着会让后半段整段变粗体。
+    """
+    out, changed = [], False
+    for ln in text.split("\n"):
+        if (
+            LONG_BOLD_RUN_RE.search(ln)
+            and not PURE_STARS_RE.match(ln)
+            and (LIST_ITEM_RE.match(ln) or ln.lstrip().startswith("****"))
+        ):
+            new = LONG_BOLD_RUN_RE.sub("**", ln)
+            if LIST_ITEM_RE.match(new) and len(BOLD_DELIM_RE.findall(new)) % 2:
+                idx = new.rfind("**")
+                if idx > 0:
+                    new = new[:idx] + new[idx + 2:]
+            if new != ln:
+                changed = True
+                ln = new
+        out.append(ln)
+    if changed:
+        notes.append("归一加粗标记粘连（4 颗以上星号）")
+    return "\n".join(out)
 
 
 # 「一位数章号」判定：本文若用 `**1**` / `**1 名称**` 这类**一位数**编号当章，
@@ -892,6 +1008,65 @@ def shift_body_headings(text, title, notes):
     return "\n".join(out)
 
 
+# 中文数字序号标题：`一、xxx` / `二、xxx`。
+# 抓取器只在原文是 `<hN>`、或带 `font-weight:bold` 的 `<section>` 时才给 `##`；
+# 作者偶尔把其中一节写成普通段落，大纲就少一章 —— 实测「Gartner 发布 2027 十大
+# 战略技术趋势」：`一、二、三` 都是 `##`，`四、CIO与技术团队，该如何读懂这份报告？`
+# 却掉成了正文，整篇最后一章从大纲里消失。
+CN_HEAD_RE = re.compile(r"^([一二三四五六七八九十]+)、\s*(\S.*)$")
+
+
+def promote_cn_numbered_heads(text, notes):
+    """把「与既有中文序号标题同级、却掉成段落」的行补成标题。
+
+    闸门（缺一不可，宁可漏也不要误提正文）：
+      * 全文已有 **≥2 个** `一、`~`十、` 形态的标题 —— 说明这就是本文的章号体系；
+      * 候选行是独立的短行（≤ 40 字），不以句末标点收尾
+        （`。；，` 挡掉，`？`/`！` 放行 —— 设问式、感叹式标题很常见）；
+      * 该序号**还没有**同名标题（避免把目录项、重复段落提上来）。
+    层级沿用既有中文序号标题里出现最多的那一级。
+    """
+    lines = text.split("\n")
+    flags = fence_map(lines)
+
+    levels, seen = {}, set()
+    for i, ln in enumerate(lines):
+        if flags[i]:
+            continue
+        m = HEAD_LINE_RE.match(ln)
+        if not m:
+            continue
+        cm = CN_HEAD_RE.match(m.group(2).strip())
+        if cm:
+            levels[len(m.group(1))] = levels.get(len(m.group(1)), 0) + 1
+            seen.add(cm.group(1))
+    if sum(levels.values()) < 2:
+        return text, []
+    level = max(levels, key=lambda k: (levels[k], -k))
+
+    out, hit = [], 0
+    for i, ln in enumerate(lines):
+        if flags[i]:
+            out.append(ln)
+            continue
+        s = ln.strip()
+        cm = CN_HEAD_RE.match(s) if s else None
+        if (
+            cm
+            and cm.group(1) not in seen
+            and len(s) <= HEAD_MAX_LEN
+            and s[-1] not in "。；，,.;"
+        ):
+            out.append("%s %s" % ("#" * level, s))
+            seen.add(cm.group(1))
+            hit += 1
+            continue
+        out.append(ln)
+    if hit:
+        return "\n".join(out), ["中文序号标题补级（%d 处）" % hit]
+    return text, []
+
+
 def rebuild_headings(text):
     """按标题里的**编号**重建多级层级，并把够格的加粗行提成标题（pitfalls #24）。
 
@@ -955,8 +1130,8 @@ def rebuild_headings(text):
 
         if head is not None:
             txt, cur, raw = head
-            if BOLD_LIST_ITEM_RE.match(txt):
-                # HTML 已把它标成标题，但内容是「编号列表项」—— 保层级、去掉加粗
+            if HEAD_BRACKET_ITEM_RE.match(txt):
+                # HTML 已把它标成标题，但内容是「括号编号列表项」—— 保层级、去掉加粗
                 out.append("%s %s" % ("#" * cur, txt) if txt != raw else ln)
                 continue
             kind, lvl = classify_head_number(txt, has_multi_dot)
@@ -969,8 +1144,12 @@ def rebuild_headings(text):
                 continue
         else:
             txt, cur = bold, None
-            if BOLD_LIST_ITEM_RE.match(txt):
-                # 编号列表项（`3.可视化展示` / `（1）朴素 RAG…`），作者只是顺手加粗 —— 不是标题
+            # 编号列表项（`3.可视化展示` / `（1）朴素 RAG…`），作者只是顺手加粗 —— 不是标题。
+            # ⚠️ 例外：**带编号且以冒号收尾**（`**1.事前策略预配置与仿真测试：**`）。
+            #    冒号说明它是在给下面整段起头，是作者写小标题的习惯；按列表项处理会让
+            #    这一节彻底没有标题（实测「浅谈网络安全纵深防御体系之自动封禁能力建设
+            #    实践」的全生命周期管理下三个措施全部掉成加粗段落）。
+            if BOLD_LIST_ITEM_RE.match(txt) and txt[-1] not in "：:":
                 out.append(ln)
                 continue
             kind, lvl = classify_head_number(txt, has_multi_dot)
@@ -1124,11 +1303,14 @@ IMG_ALT_RE = re.compile(r"^Image(?=\S)")
 
 
 def fix_heading_lines(lines):
-    """修标题行，两件事：
+    """修标题行，三件事：
 
     1. 去掉抓取器残留的 `Image` alt 前缀（`## Image结论：…` -> `## 结论：…`）。
        `!\\[Image\\](url)` 的方括号与链接被剥掉后只剩这个词，会让标题带上脏前缀。
-    2. 拆分「标题里塞进了正文句子」的行 —— 断点取「汉字 + 空格 + 拉丁字母」
+    2. 去掉标题行里的**加粗标记**。标题本身就有层级语义，`**` 在标题里只有坏处：
+       `## **1.事前策略预配置与仿真测试：**` 会连编号一起被 `**` 挡住、层级重建失效，
+       `## 自动封禁体系核心能力与落地实践**`（粘连残留）则会在渲染里漏两个星号。
+    3. 拆分「标题里塞进了正文句子」的行 —— 断点取「汉字 + 空格 + 拉丁字母」
        （正文常以英文术语开头），但切出来的正文必须是完整句子（含 `。`）。
        没有这道闸门，`范围 vs 精度：…？`、`徐文辉    S068…` 这类正常标题会被误拆。
 
@@ -1142,7 +1324,7 @@ def fix_heading_lines(lines):
             continue
         m = None if inside else re.match(r"^(#{1,6})\s+(.*)$", ln)
         if m:
-            text = IMG_ALT_RE.sub("", m.group(2))
+            text = IMG_ALT_RE.sub("", m.group(2)).replace("**", "")
             hit = GLUE_RE.search(text)
             if hit and "。" in text[hit.end():]:
                 cut = hit.start() + 1
@@ -1153,6 +1335,35 @@ def fix_heading_lines(lines):
             if text != m.group(2):
                 out.append("%s %s" % (m.group(1), text))
                 continue
+        out.append(ln)
+    return out
+
+
+NUM_HEAD_SPACE_RE = re.compile(r"^(#{2,6})\s+([1-9]\d*)\.(?!\d)(\S.*)$")
+
+
+def normalize_heading_layout(lines):
+    """标题行的版式归一（两件小事）。
+
+    1. 标题前**补一个空行** —— `rebuild_headings()` 把一行加粗提升成标题后，它可能
+       紧贴在上一段正文后面（PART 清理会把中间的空行一起吃掉）。Markdown 仍能渲染，
+       但源码里挤在一起，编辑时容易误合并。
+    2. `### 1.xxx` → `### 1. xxx` —— 同一篇里 `1. xxx` 与 `1.xxx` 混用很常见，
+       统一成本项目写法（点号后留空格）。`(?!"\\d")` 那一位保证 `1.2.1 协议栈`
+       不会被拆成 `1. 2.1 协议栈`。
+    """
+    out, inside = [], False
+    for ln in lines:
+        if ln.lstrip().startswith("```"):
+            inside = not inside
+            out.append(ln)
+            continue
+        if not inside:
+            m = NUM_HEAD_SPACE_RE.match(ln)
+            if m:
+                ln = "%s %s. %s" % (m.group(1), m.group(2), m.group(3))
+            if re.match(r"^#{1,6}\s", ln) and out and out[-1].strip():
+                out.append("")
         out.append(ln)
     return out
 
@@ -1251,6 +1462,10 @@ def convert(dir_name, base, tags, date_override=None):
         text,
     )
 
+    # 加粗标记粘连（≥4 颗星号）。**必须先于 PART 清理**：`****PART****03****`
+    # 先归一成 `**PART**03**`，PART 正则才能整条吃掉；反过来会剩下一行光秃秃的 `**`。
+    text = normalize_bold_runs(text, notes)
+
     # 机构文的 PART 标记：**PART**01** / **PART****02** / **PART02**
     # 必须先于「加粗分裂合并」执行：否则 **PART****02** 会先被合并成 **PART02** 而漏掉。
     if re.search(r"\*\*PART\*{0,4}\s*\d+\*{0,4}", text):
@@ -1299,6 +1514,11 @@ def convert(dir_name, base, tags, date_override=None):
     # 目录块重排（必须在标题重建之前：「目录」那一行此刻还是加粗形态）
     text = rebuild_toc(text, notes)
 
+    # 中文序号标题补级（`四、…` 掉成段落）。必须在 rebuild_headings 之前：
+    # 补成 `##` 后才轮到层级重建去认它。
+    text, cn_notes = promote_cn_numbered_heads(text, notes)
+    notes.extend(cn_notes)
+
     # 章节层级：按编号重建多级标题（旧版是一律把 ### 压成 ##，没有层级）
     text, head_notes = rebuild_headings(text)
     notes.extend(head_notes)
@@ -1308,10 +1528,11 @@ def convert(dir_name, base, tags, date_override=None):
     text, fold_notes = fold_empty_heads(text)
     notes.extend(fold_notes)
 
-    # 标题-正文粘连拆分
+    # 标题-正文粘连拆分 / 标题行去加粗 / 标题版式归一
     fixed = fix_heading_lines(text.split("\n"))
+    fixed = normalize_heading_layout(fixed)
     if fixed != text.split("\n"):
-        notes.append("拆分粘连的标题-正文")
+        notes.append("修标题行（去加粗 / 拆分粘连正文 / 版式归一）")
         text = "\n".join(fixed)
 
     # 全文清理

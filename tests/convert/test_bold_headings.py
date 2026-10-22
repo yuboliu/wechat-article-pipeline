@@ -48,6 +48,75 @@ class TestStripDupTitleHead(unittest.TestCase):
         text = "当金融机构逐步向多数据中心架构演进时。\n"
         self.assertEqual(m.strip_dup_title_head(text, TITLE), text)
 
+    def test_banner_title_split_across_lines(self):
+        # `**前半` + 空行 + `后半**`：一对 `**` 被换行拆到两个段落（浅谈自动封禁 一篇）
+        title = "浅谈网络安全纵深防御体系之自动封禁能力建设实践"
+        text = (
+            "![](images/img_001.jpeg)![](images/img_002.png)"
+            "**浅谈网络安全纵深防御体系之\n\n自动封禁能力建设实践**\n\n**引言**\n\n正文。\n"
+        )
+        out = m.strip_dup_title_head(text, title)
+        self.assertNotIn("浅谈网络安全纵深防御体系之", out)
+        self.assertNotIn("img_001", out)
+        # 紧跟的 `**引言**` 不能被当成 banner 的一部分吃掉
+        self.assertIn("**引言**", out)
+        self.assertIn("正文。", out)
+
+    def test_banner_followed_by_bold_lead(self):
+        # banner 拼完标题就收手：后面紧跟的加粗行（`**引言**`）不属于 banner
+        title = "网络原来如此之G行数据中心分布式域名解析系统设计"
+        text = (
+            "**网络原来如此之****G行数据中心分布式域名解析系统设计**\n\n"
+            "**引言**\n\n正文。\n"
+        )
+        out = m.strip_dup_title_head(text, title)
+        self.assertIn("**引言**", out)
+        self.assertIn("正文。", out)
+        self.assertNotIn("网络原来如此之", out)
+
+    def test_lead_bold_line_kept_when_banner_absent(self):
+        # 没有 banner 时，正文首行的加粗小标题不能被动
+        text = "**引言**\n\n正文。\n"
+        self.assertEqual(m.strip_dup_title_head(text, TITLE), text)
+
+
+class TestNormalizeBoldRuns(unittest.TestCase):
+    """≥4 颗星号的「加粗粘连」归一（浅谈自动封禁 一篇的三种形态）。"""
+
+    def run_it(self, text):
+        return m.normalize_bold_runs(text, [])
+
+    def test_list_item_four_stars_both_ends(self):
+        self.assertEqual(
+            self.run_it("- ****外部攻击告警量大，告警疲劳导致人工处置效率低下****"),
+            "- **外部攻击告警量大，告警疲劳导致人工处置效率低下**",
+        )
+
+    def test_list_item_inner_four_stars(self):
+        self.assertEqual(
+            self.run_it("- ****高效性****：针对海量告警数据实时分级分类"),
+            "- **高效性**：针对海量告警数据实时分级分类",
+        )
+
+    def test_list_item_eight_stars_with_dangling_tail(self):
+        # `精准性********：****自动封禁…` 归一后剩一个孤儿开标记，要一起摘掉
+        self.assertEqual(
+            self.run_it("- ****精准性********：****自动封禁效率远超人工处置"),
+            "- **精准性**：自动封禁效率远超人工处置",
+        )
+
+    def test_part_line_normalized(self):
+        # PART 清理能整条吃掉的前提（必须先归一成 `**PART**03**`）
+        self.assertEqual(self.run_it("****PART****03****"), "**PART**03**")
+
+    def test_horizontal_rules_untouched(self):
+        for hr in ("***", "****", "*****", "---", "___"):
+            self.assertEqual(self.run_it(hr), hr)
+
+    def test_plain_paragraph_untouched(self):
+        text = "正文里的 **** 不该被动"
+        self.assertEqual(self.run_it(text), text)
+
 
 def norm(text):
     out, _notes = m.normalize_bold_headings(text)

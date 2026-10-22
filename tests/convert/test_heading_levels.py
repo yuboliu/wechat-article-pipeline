@@ -32,6 +32,14 @@ class TestClassify(unittest.TestCase):
         # 编号后没有分隔符、也不是两位编号 -> 不是标题编号（防「802.1Q标准」）
         self.assertEqual(m.classify_head_number("802.1Q标准"), ("plain", None))
 
+    def test_dot1_without_space(self):
+        """`1.xxx` 与 `1. xxx` 等价（作者混用是常态，不能靠空格区分章/节）。"""
+        self.assertEqual(m.classify_head_number("1.自动封禁体系高效性目标建设实践"), ("dot1", 3))
+        self.assertEqual(m.classify_head_number("1. 自动封禁体系建设背景"), ("dot1", 3))
+        # 但点号后紧跟数字仍是版本号，不能当编号
+        self.assertEqual(m.classify_head_number("802.1Q标准"), ("plain", None))
+        self.assertEqual(m.classify_head_number("1.2.1 协议栈"), ("dot", 4))
+
 
 class TestBoldFilter(unittest.TestCase):
     def test_heading_like(self):
@@ -80,6 +88,92 @@ class TestRebuildHeadings(unittest.TestCase):
     def test_h1_is_untouched(self):
         text = "# 文章标题\n\n**1 甲**"
         self.assertEqual(heads(text), ["# 文章标题", "## 1 甲"])
+
+    def test_two_dot_styles_same_article_same_level(self):
+        """同篇 `## 1. 甲` 与 `## 2.乙` 必须同级（浅谈自动封禁 一篇 PART 02/03）。"""
+        text = "\n\n".join([
+            "## 一、总述", "正文。", "## 1. 建设背景", "正文。",
+            "## 2.高效性目标建设实践", "正文。",
+        ])
+        self.assertEqual(heads(text), [
+            "## 一、总述", "### 1. 建设背景", "### 2.高效性目标建设实践",
+        ])
+
+    def test_bracket_numbered_heading_keeps_level(self):
+        """括号编号的标题行仍按「列表项」处理（知识图谱RAG 那篇）。"""
+        text = "## （1）朴素 RAG 阶段"
+        self.assertEqual(heads(text), ["## （1）朴素 RAG 阶段"])
+
+    def test_numbered_bold_with_trailing_colon_is_heading(self):
+        """`**1.xxx：**` 带编号且以冒号收尾 -> 是作者的小标题，不是编号列表项。"""
+        text = "\n\n".join([
+            "## 全生命周期管理", "正文。", "**1.事前策略预配置与仿真测试：**", "正文。",
+        ])
+        self.assertIn("### 1.事前策略预配置与仿真测试：", heads(text))
+
+    def test_unnumbered_colon_sentence_still_filtered(self):
+        """无编号的`…：`仍是引导句，不能被提成标题（原有闸门不能松）。"""
+        text = "**应重点考虑以下技术建议：**"
+        self.assertEqual(heads(text), [])
+
+
+class TestPromoteCnNumberedHeads(unittest.TestCase):
+    """`四、…` 掉成段落时补回标题（Gartner 2027 十大趋势 一篇）。"""
+
+    def run_it(self, text):
+        return m.promote_cn_numbered_heads(text, [])
+
+    def test_fourth_section_promoted(self):
+        text = "\n\n".join([
+            "## 一、甲", "正文。", "## 二、乙", "正文。", "## 三、丙", "正文。",
+            "四、丁，该如何读？", "正文。",
+        ])
+        out, notes = self.run_it(text)
+        self.assertIn("## 四、丁，该如何读？", out)
+        self.assertTrue(notes)
+
+    def test_no_sibling_headings_untouched(self):
+        text = "四、这只是一段正文？\n"
+        out, notes = self.run_it(text)
+        self.assertEqual(out, text)
+        self.assertEqual(notes, [])
+
+    def test_duplicate_numeral_not_promoted(self):
+        # 已有 `## 一、甲` 时，正文里再出现 `一、…` 不动（防目录项 / 重复段）
+        text = "\n\n".join(["## 一、甲", "## 二、乙", "一、重复项", "正文。"])
+        out, _ = self.run_it(text)
+        self.assertNotIn("## 一、重复项", out)
+
+    def test_sentence_with_period_not_promoted(self):
+        text = "\n\n".join(["## 一、甲", "## 二、乙", "三、这一段是正文，写了很长的一句话。"])
+        out, _ = self.run_it(text)
+        self.assertNotIn("## 三、这一段", out)
+
+
+class TestNormalizeHeadingLayout(unittest.TestCase):
+    def test_blank_line_before_heading_inserted(self):
+        self.assertEqual(
+            m.normalize_heading_layout(["正文。", "## 标题"]),
+            ["正文。", "", "## 标题"],
+        )
+
+    def test_existing_blank_not_doubled(self):
+        self.assertEqual(
+            m.normalize_heading_layout(["正文。", "", "## 标题"]),
+            ["正文。", "", "## 标题"],
+        )
+
+    def test_number_spacing_normalized(self):
+        self.assertEqual(m.normalize_heading_layout(["### 1.xxx"]), ["### 1. xxx"])
+
+    def test_dotted_number_not_split(self):
+        self.assertEqual(
+            m.normalize_heading_layout(["### 1.2.1 协议栈"]), ["### 1.2.1 协议栈"]
+        )
+
+    def test_code_fence_untouched(self):
+        lines = ["```", "## 1.x", "```"]
+        self.assertEqual(m.normalize_heading_layout(lines), lines)
 
 
 class TestRebuildToc(unittest.TestCase):

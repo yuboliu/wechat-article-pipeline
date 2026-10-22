@@ -778,10 +778,19 @@ def convert_to_markdown(content_html: str, code_blocks: list[dict]) -> str:
 
 
 def replace_image_urls(md: str, url_map: dict[str, str]) -> str:
-    """替换 Markdown 中的远程图片链接为本地路径"""
+    """替换 Markdown 中的远程图片链接为本地路径。
+
+    ⚠️ 必须容忍**可选 title**：markdownify 对带 `title` 属性的 `<img>` 会输出
+    `![](url "undefined")`，而旧版正则是 `![]\\(url\\)` —— 少一个 title 就匹配不上，
+    图**已经下载到本地了却仍指向远程地址**（实测「浅谈网络安全纵深防御体系之
+    自动封禁能力建设实践」：架构图下载成 `img_005.png`，正文里却留着 mmbiz 链接，
+    校验报「残留远程资源」）。
+    """
     # Use exact URL matching to avoid regex edge cases such as ')' in URL.
     for remote_url, local_path in url_map.items():
-        pattern = re.compile(r"!\[([^\]]*)\]\(" + re.escape(remote_url) + r"\)")
+        pattern = re.compile(
+            r"!\[([^\]]*)\]\(" + re.escape(remote_url) + r'(?:\s+"[^"]*")?\)'
+        )
         md = pattern.sub(lambda m: f"![{m.group(1)}]({local_path})", md)
     return md
 
