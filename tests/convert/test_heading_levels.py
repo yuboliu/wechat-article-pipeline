@@ -263,6 +263,126 @@ class TestFoldEmptyHeads(unittest.TestCase):
         text = "## 只有一章"
         self.assertEqual(self.folded(text), ["## 只有一章"])
 
+NL = chr(10)
+
+
+def p(*parts):
+    """把若干行拼成「空行分隔」的 Markdown 片段（测试里不写反斜杠转义）。"""
+    return (NL + NL).join(parts)
+
+
+class TestCnHeadsWithoutAnchor(unittest.TestCase):
+    """中文序号章标题**全部**掉成段落时（pitfalls #50）。
+
+    实测「从 RAGFlow 到 GraphRAG」：`一、`/`二、`/`三、` 三条章标题都是普通段落，
+    旧规则要求「全文已有 ≥2 个中文序号标题」才肯补级，于是整篇一章都没有。
+    """
+
+    def test_all_paragraph_cn_heads_promoted(self):
+        text = p("一、甲", "正文一。", "二、乙", "正文二。", "三、丙", "正文三。") + NL
+        out, notes = m.promote_cn_numbered_heads(text, [])
+        self.assertIn("## 一、甲", out)
+        self.assertIn("## 二、乙", out)
+        self.assertIn("## 三、丙", out)
+        self.assertTrue(notes)
+
+    def test_non_sequential_not_promoted(self):
+        # 序号不连续 -> 大概率是正文里顺口写的，整组不动
+        text = p("一、甲", "正文。", "三、乙", "正文。", "五、丙", "正文。") + NL
+        out, notes = m.promote_cn_numbered_heads(text, [])
+        self.assertEqual(out, text)
+        self.assertEqual(notes, [])
+
+    def test_too_few_candidates(self):
+        text = p("一、甲", "正文。", "二、乙", "正文。") + NL
+        out, notes = m.promote_cn_numbered_heads(text, [])
+        self.assertEqual(notes, [])
+
+    def test_sentence_like_candidate_not_promoted(self):
+        text = p("一、甲", "正文。", "二、乙", "正文。", "三、丙这一段其实是正文句子。") + NL
+        out, notes = m.promote_cn_numbered_heads(text, [])
+        self.assertEqual(notes, [])
+
+    def test_cn_num_parser(self):
+        self.assertEqual(m.cn_num_to_int("一"), 1)
+        self.assertEqual(m.cn_num_to_int("十"), 10)
+        self.assertEqual(m.cn_num_to_int("十一"), 11)
+        self.assertEqual(m.cn_num_to_int("二十一"), 21)
+        self.assertIsNone(m.cn_num_to_int("甲"))
+
+
+class TestDunSectionsUnderCnHeads(unittest.TestCase):
+    """章用中文序号、节用 `1、2、` 顿号时，节必须挂在章下一级（pitfalls #51）。"""
+
+    def test_dun_section_demoted(self):
+        text = p("## 一、章甲", "正文。", "## 1、节一", "正文。", "## 2、节二", "正文。") + NL
+        out, _notes = m.rebuild_headings(text)
+        self.assertIn("### 1、节一", out)
+        self.assertIn("### 2、节二", out)
+
+    def test_no_cn_anchor_keeps_top_level(self):
+        # 没有中文序号章体系时，`1、` 仍是顶级（不能凭空降级）
+        text = p("## 1、章一", "正文。", "## 2、章二", "正文。") + NL
+        out, _notes = m.rebuild_headings(text)
+        self.assertIn("## 1、章一", out)
+        self.assertIn("## 2、章二", out)
+
+
+class TestBracketHeads(unittest.TestCase):
+    """`（1）xxx` 括号编号小节的补级（pitfalls #52）。"""
+
+    def test_group_promoted_same_level(self):
+        text = p("## 二、章", "### 2、分层",
+                 "（1）图构建引擎", "正文。",
+                 "（2）图数据库与存储层", "正文。",
+                 "（3）图推理与检索层", "正文。") + NL
+        out, notes = m.promote_bracket_heads(text)
+        self.assertIn("#### （1）图构建引擎", out)
+        self.assertIn("#### （2）图数据库与存储层", out)
+        self.assertIn("#### （3）图推理与检索层", out)
+        self.assertTrue(notes)
+
+    def test_long_lead_in_not_promoted(self):
+        # 带正文的长句（含句号）是段落，不是小节标题
+        text = p("## 二、章",
+                 "（1）全局推理能力：GraphRAG 能够整合多个文档。",
+                 "（2）强可解释性：每个答案均可溯源。",
+                 "（3）知识抽象：能自动梳理主题。") + NL
+        out, notes = m.promote_bracket_heads(text)
+        self.assertEqual(out, text)
+        self.assertEqual(notes, [])
+
+    def test_non_sequential_not_promoted(self):
+        text = p("## 章", "（1）甲", "正文。", "（3）乙", "正文。", "（4）丙", "正文。") + NL
+        out, notes = m.promote_bracket_heads(text)
+        self.assertEqual(notes, [])
+
+    def test_fenced_bracket_lines_untouched(self):
+        text = p("## 章", "```", "（1）甲", "（2）乙", "（3）丙", "```") + NL
+        out, notes = m.promote_bracket_heads(text)
+        self.assertEqual(out, text)
+
+
+class TestEmptyTableHeader(unittest.TestCase):
+    """空表头 -> 首条正文行顶上去（pitfalls #49）。"""
+
+    def test_empty_header_promoted(self):
+        # 表格行必须**相邻**（p() 插的是空行，会把表格拆散），这里直接拼单换行
+        text = NL.join(["|  |  |", "| --- | --- |", "| **层次** | **回答的问题** |",
+                        "| 协议状态 | 是否建立？ |"]) + NL
+        out = m.fix_empty_table_header(text, [])
+        self.assertEqual(
+            out, NL.join(["| 层次 | 回答的问题 |", "| --- | --- |",
+                          "| 协议状态 | 是否建立？ |"]) + NL)
+
+    def test_normal_table_untouched(self):
+        text = NL.join(["| 甲 | 乙 |", "| --- | --- |", "| 1 | 2 |"]) + NL
+        self.assertEqual(m.fix_empty_table_header(text, []), text)
+
+    def test_header_only_untouched(self):
+        text = NL.join(["|  |  |", "| --- | --- |"]) + NL
+        self.assertEqual(m.fix_empty_table_header(text, []), text)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

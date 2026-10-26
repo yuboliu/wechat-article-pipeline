@@ -196,6 +196,24 @@ class TestDottedSectionLevel(unittest.TestCase):
         self.assertIn("### 1. SSL 卸载", out)
         self.assertIn("## 架构分析", out)
 
+class TestBoldCompositionAndStrayPunct(unittest.TestCase):
+    """「构成式」加粗行不当标题 / 行尾标点加粗去壳（pitfalls #53、#54）。"""
+
+    def test_composition_bold_is_not_head(self):
+        # `A + B + C` 描述报文由哪几层拼成，进大纲就是假章节（IP→SRv6 那篇两次）
+        self.assertFalse(m.bold_can_be_head("外层运输标签 + 内层 VPN 业务标签 + 原始 IP 数据包"))
+        self.assertFalse(m.bold_can_be_head("多个 SR 路径标签 + VPN 业务标签 + 客户 IP 数据包"))
+
+    def test_composition_not_promoted_to_heading(self):
+        text = "## 四、L3VPN" + chr(10) + chr(10) + "**外层运输标签 + 内层 VPN 业务标签 + 原始 IP 数据包**" + chr(10)
+        out, _notes = m.rebuild_headings(text)
+        self.assertIn("**外层运输标签 + 内层 VPN 业务标签 + 原始 IP 数据包**", out)
+        self.assertNotIn("## 外层运输标签", out)
+
+    def test_plus_without_space_still_head(self):
+        # `C++` / `A+B` 不带空格，不受影响
+        self.assertTrue(m.bold_can_be_head("C++ 服务端接入层"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

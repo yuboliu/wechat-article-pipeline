@@ -660,10 +660,16 @@ def bold_can_be_head(txt):
     ⚠️ 例外：**带编号**的加粗行，结尾的冒号是作者写小标题的习惯，不是引导句
     （`**1.事前策略预配置与仿真测试：**`）。判定用 `classify_head_number()`，
     只有认得出编号（`1.` / `1.2` / `01`）才放行 —— 无编号的加粗句一律按原规则挡掉。
+    ⚠️ 「构成式」强调句（`**外层运输标签 + 内层 VPN 业务标签 + 原始 IP 数据包**`）
+    一律不当标题：它描述的是「报文由哪几层拼成」，进大纲只会变成一条假章节
+    （pitfalls #53，实测「图解从 IP 到 SRv6」一篇出现两次）。判据用**带空格的加号**，
+    避免误伤 `C++` / `A+B` 这类词（它们不带空格）。
     """
     if not txt or len(txt) > HEAD_MAX_LEN:
         return False
     if "。" in txt:
+        return False
+    if BOLD_PLUS_RE.search(txt):
         return False
     if txt[-1] in "：:" and classify_head_number(txt)[0] != "plain":
         return True
@@ -673,6 +679,8 @@ def bold_can_be_head(txt):
 
 
 DIGITS_ONLY_RE = re.compile(r"^\d+$")
+# 「A + B + C」构成式加粗行（见 bold_can_be_head）。必须带空格，`C++` / `A+B` 不算。
+BOLD_PLUS_RE = re.compile(r"\s\+\s")
 BOLD_RUN_RE = re.compile(r"\*\*([^*\n]+)\*\*")
 BOLD_RUNS_HEAD_RE = re.compile(r"^\s*((?:\*\*[^*\n]+\*\*)+)\s*(\S.*)?$")
 # 「够格被拆成小节标题」的加粗前缀：两位编号（`01`，跟着上一级）或 `1.` 这种带点编号。
@@ -1014,17 +1022,43 @@ def shift_body_headings(text, title, notes):
 # 战略技术趋势」：`一、二、三` 都是 `##`，`四、CIO与技术团队，该如何读懂这份报告？`
 # 却掉成了正文，整篇最后一章从大纲里消失。
 CN_HEAD_RE = re.compile(r"^([一二三四五六七八九十]+)、\s*(\S.*)$")
+# `1、标题`（阿拉伯数字 + 顿号）—— 中文序号章体系里的「节」写法。
+CN_ENUM_DUN_RE = re.compile(r"^\d{1,2}、")
+CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def cn_num_to_int(s):
+    """`一`→1、`十`→10、`十一`→11、`二十一`→21。认不出返回 None。"""
+    if not s:
+        return None
+    if "十" in s:
+        tens_s, _, ones_s = s.partition("十")
+        tens = CN_DIGITS.get(tens_s, 1) if tens_s else 1
+        ones = CN_DIGITS.get(ones_s, 0) if ones_s else 0
+        if ones_s and ones_s not in CN_DIGITS:
+            return None
+        return tens * 10 + ones
+    return CN_DIGITS.get(s)
 
 
 def promote_cn_numbered_heads(text, notes):
     """把「与既有中文序号标题同级、却掉成段落」的行补成标题。
 
+    两种模式，按「全文还有没有中文序号**标题**」区分：
+
+    **① 锚点模式**（有 ≥2 个 `一、`~`十、` 形态的标题）
     闸门（缺一不可，宁可漏也不要误提正文）：
-      * 全文已有 **≥2 个** `一、`~`十、` 形态的标题 —— 说明这就是本文的章号体系；
       * 候选行是独立的短行（≤ 40 字），不以句末标点收尾
         （`。；，` 挡掉，`？`/`！` 放行 —— 设问式、感叹式标题很常见）；
       * 该序号**还没有**同名标题（避免把目录项、重复段落提上来）。
     层级沿用既有中文序号标题里出现最多的那一级。
+
+    **② 全掉模式**（一个中文序号标题都没有，见「从 RAGFlow 到 GraphRAG」一篇：
+    `一、`/`二、`/`三、` 三条章标题**全部**是普通段落）
+    抓不到锚点，只能整组认：≥3 个候选行，且序号必须**从 `一` 起连续递增**
+    （1、2、3…，缺一个就整组不动 —— 承认漏，不接受误提）。层级取 `##`。
+    ⚠️ 严格要求递增是有意的：正文里顺口写的「一、…」通常零散、不连续。
     """
     lines = text.split("\n")
     flags = fence_map(lines)
@@ -1040,31 +1074,160 @@ def promote_cn_numbered_heads(text, notes):
         if cm:
             levels[len(m.group(1))] = levels.get(len(m.group(1)), 0) + 1
             seen.add(cm.group(1))
-    if sum(levels.values()) < 2:
-        return text, []
-    level = max(levels, key=lambda k: (levels[k], -k))
 
-    out, hit = [], 0
+    if sum(levels.values()) >= 2:
+        level = max(levels, key=lambda k: (levels[k], -k))
+        out, hit = [], 0
+        for i, ln in enumerate(lines):
+            if flags[i]:
+                out.append(ln)
+                continue
+            s = ln.strip()
+            cm = CN_HEAD_RE.match(s) if s else None
+            if (
+                cm
+                and cm.group(1) not in seen
+                and len(s) <= HEAD_MAX_LEN
+                and s[-1] not in "。；，,.;"
+            ):
+                out.append("%s %s" % ("#" * level, s))
+                seen.add(cm.group(1))
+                hit += 1
+                continue
+            out.append(ln)
+        if hit:
+            return "\n".join(out), ["中文序号标题补级（%d 处）" % hit]
+        return text, []
+
+    # ② 全掉模式
+    cands = []
     for i, ln in enumerate(lines):
         if flags[i]:
-            out.append(ln)
             continue
         s = ln.strip()
         cm = CN_HEAD_RE.match(s) if s else None
-        if (
-            cm
-            and cm.group(1) not in seen
-            and len(s) <= HEAD_MAX_LEN
-            and s[-1] not in "。；，,.;"
-        ):
-            out.append("%s %s" % ("#" * level, s))
-            seen.add(cm.group(1))
-            hit += 1
+        if not cm:
             continue
-        out.append(ln)
+        if len(s) > HEAD_MAX_LEN or s[-1] in "。；，,.;":
+            continue
+        n = cn_num_to_int(cm.group(1))
+        if n:
+            cands.append((i, n))
+    if len(cands) < 3:
+        return text, []
+    if [n for _, n in cands] != list(range(1, len(cands) + 1)):
+        return text, []
+
+    out = list(lines)
+    for i, _n in cands:
+        out[i] = "## " + out[i].strip()
+    return "\n".join(out), ["中文序号标题补级（%d 处，全篇无锚点）" % len(cands)]
+
+
+BRACKET_HEAD_RE = re.compile(r"^[（(](\d{1,2})[）)]\s*(\S.*)$")
+
+
+def promote_bracket_heads(text):
+    """`（1）图构建引擎` 这类「括号编号 + 短标题」独占一行时补成标题（pitfalls #52）。
+
+    作者常把小节写成 `（1）…`，公众号不给它标题样式，抓取后只是普通段落 ——
+    大纲里整组小节消失（实测「从 RAGFlow 到 GraphRAG」的「（1）图构建引擎 /
+    （2）图数据库与存储层 /（3）图推理与检索层 /（4）语义融合与生成」四条）。
+
+    闸门（全中才动，宁可漏也不要误提正文）：
+      * ≥3 个候选，且编号**从 1 起连续递增**（1、2、3…）；
+      * 每个候选是短行（≤ 40 字）、不含句号、不以句末标点收尾 ——
+        「（1）全局推理能力：GraphRAG 能够…。」这类带正文的长句自动落选；
+      * 层级 = 各自**前面最近的标题** + 1（夹在 3~6）。
+    """
+    lines = text.split("\n")
+    flags = fence_map(lines)
+
+    cands = []
+    for i, ln in enumerate(lines):
+        if flags[i]:
+            continue
+        s = ln.strip()
+        m = BRACKET_HEAD_RE.match(s)
+        if not m:
+            continue
+        if len(s) > HEAD_MAX_LEN or "。" in s or s[-1] in HEAD_STOP_PUNCT:
+            continue
+        cands.append((i, int(m.group(1))))
+    if len(cands) < 3:
+        return text, []
+    if [n for _, n in cands] != list(range(1, len(cands) + 1)):
+        return text, []
+
+    out = list(lines)
+    cur_head = 0          # 前面最近的标题层级 —— 同组的括号编号统一挂它下面一级
+    ci = 0
+    for i, ln in enumerate(lines):
+        if ci < len(cands) and cands[ci][0] == i:
+            lvl = min(max(cur_head + 1, 3), 6)
+            out[i] = "%s %s" % ("#" * lvl, ln.strip())
+            ci += 1
+            continue
+        m = None if flags[i] else HEAD_LINE_RE.match(ln)
+        if m:
+            cur_head = len(m.group(1))
+    return "\n".join(out), ["括号编号小节补级（%d 处）" % len(cands)]
+
+
+TABLE_ROW_RE = re.compile(r"^\s*\|")
+TABLE_DELIM_RE = re.compile(r"^\s*\|(?:\s*:?-{2,}:?\s*\|)+\s*$")
+
+
+def _table_cells(row):
+    s = row.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def fix_empty_table_header(text, notes):
+    """表头整行为空 → 把第一条正文行提为表头（pitfalls #49）。
+
+    公众号的表格常把「表头」写在 `<tbody>` 第一行，`<thead>` 留空。markdownify
+    照实输出成：
+
+        |  |  |
+        | --- | --- |
+        | **层次** | **回答的问题** |
+        | 协议状态 | … |
+
+    Obsidian 会把「层次 / 回答的问题」当成普通数据行，表格看着像少了一行表头。
+    这里把空表头行丢掉、首条正文行顶上去当表头（顺手去掉它的 `**`，表头本来就加粗）。
+    """
+    lines = text.split("\n")
+    flags = fence_map(lines)
+    out, hit, i = [], 0, 0
+    while i < len(lines):
+        if (
+            not flags[i]
+            and TABLE_ROW_RE.match(lines[i])
+            and i + 2 < len(lines)
+            and TABLE_DELIM_RE.match(lines[i + 1])
+            and TABLE_ROW_RE.match(lines[i + 2])
+            and all(c == "" for c in _table_cells(lines[i]))
+        ):
+            j = i + 2
+            while j < len(lines) and TABLE_ROW_RE.match(lines[j]):
+                j += 1
+            head = [c.replace("**", "").strip() for c in _table_cells(lines[i + 2])]
+            out.append("| " + " | ".join(head) + " |")
+            out.append(lines[i + 1])
+            out.extend(lines[i + 3:j])
+            hit += 1
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
     if hit:
-        return "\n".join(out), ["中文序号标题补级（%d 处）" % hit]
-    return text, []
+        notes.append("补齐空表头（提升首条正文行为表头）%d 处" % hit)
+    return "\n".join(out)
 
 
 def rebuild_headings(text):
@@ -1109,6 +1272,10 @@ def rebuild_headings(text):
 
     out, notes = [], []
     last, last_kind, num_depth, changed = 0, None, 0, False
+    # 最近一个「中文序号章标题」（`## 一、…`）的层级。用途见下面 `1、` 的处理：
+    # 同一篇里章用中文序号、节用 `1、2、` 时，`1、` 必须挂在章下面一级，
+    # 否则两者同为 `##`，大纲里「章」和「节」并列（实测「从 RAGFlow 到 GraphRAG」）。
+    cn_level = 0
 
     for i, ln in enumerate(lines):
         head = bold = None
@@ -1137,6 +1304,8 @@ def rebuild_headings(text):
             kind, lvl = classify_head_number(txt, has_multi_dot)
             if kind == "plain":
                 # 抓取器已定级的无编号标题（如 `## 总结`）：保持原级，并回到顶层
+                if CN_HEAD_RE.match(txt):
+                    cn_level = cur
                 if cur == 2:
                     num_depth = 0
                 last, last_kind = cur, "plain"
@@ -1156,6 +1325,11 @@ def rebuild_headings(text):
 
         if kind in ("dot", "int"):
             level = lvl
+            # 章用中文序号、节用 `1、2、`（中文顿号）：顿号是「小节」的强信号，
+            # 挂到章下面一级（pitfalls #51）。不用顿号的 `1 ` / `1.` 不受影响
+            # （那是另一套口径）。
+            if kind == "int" and cn_level and CN_ENUM_DUN_RE.match(txt):
+                level = min(cn_level + 1, 6)
             num_depth = level
         elif kind == "dot1":
             # `1. 小节名`：默认层级 3（F5 口径），且**不更新 num_depth**。
@@ -1180,6 +1354,8 @@ def rebuild_headings(text):
         if new != ln:
             changed = True
         out.append(new)
+        if CN_HEAD_RE.match(txt):
+            cn_level = level
         last, last_kind = level, kind
 
     if changed:
@@ -1466,6 +1642,16 @@ def convert(dir_name, base, tags, date_override=None):
     # 先归一成 `**PART**03**`，PART 正则才能整条吃掉；反过来会剩下一行光秃秃的 `**`。
     text = normalize_bold_runs(text, notes)
 
+    # 「加粗只包住一个行尾标点」的残留（pitfalls #54）：`…路径执行**。**`
+    # （微信编辑器把句末标点单独加粗）
+    # ⚠️ 必须限定在**行尾**。行中的 `**甲**。**乙**` 是两段并列加粗，去掉星号会把
+    #    它们并成一段，强调范围就变了（实测「79页RSI综述」那篇）。
+    unbolded = re.sub(r"\*\*([。，、；：？！,.;:!?])\*\*(?=[ \t]*$)", r"\1",
+                      text, flags=re.MULTILINE)
+    if unbolded != text:
+        notes.append("去掉包裹单个标点的加粗")
+        text = unbolded
+
     # 机构文的 PART 标记：**PART**01** / **PART****02** / **PART02**
     # 必须先于「加粗分裂合并」执行：否则 **PART****02** 会先被合并成 **PART02** 而漏掉。
     if re.search(r"\*\*PART\*{0,4}\s*\d+\*{0,4}", text):
@@ -1527,6 +1713,13 @@ def convert(dir_name, base, tags, date_override=None):
     # 「其后无正文」这一条判据）
     text, fold_notes = fold_empty_heads(text)
     notes.extend(fold_notes)
+
+    # `（1）xxx` 这类括号编号小节（公众号没有给它标题样式）
+    text, br_notes = promote_bracket_heads(text)
+    notes.extend(br_notes)
+
+    # 空表头（表头被写在 <tbody> 第一行）→ 提升首条正文行为表头
+    text = fix_empty_table_header(text, notes)
 
     # 标题-正文粘连拆分 / 标题行去加粗 / 标题版式归一
     fixed = fix_heading_lines(text.split("\n"))
