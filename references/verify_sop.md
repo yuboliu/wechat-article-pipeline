@@ -9,18 +9,20 @@
 
 ```
 1. 抓取   wechat_article_to_markdown.py <url>        → output/<目录名>/<目录名>.md + images/
-2. 转换   scripts/to_obsidian.py                      → <目录名>.obsidian.md
+2. 转换   scripts/to_obsidian.py                      → <目录名>.obsidian.md（含三层分面标签）
 3. 校验   ├─ Tier-1  scripts/verify_wechat_md.py（必跑，本地零成本）
          └─ Tier-2  WebFetch 对照原文（命中升级条件时才跑）
-4. 落库   scripts/sync_to_vault.py                    → vault/公众号/<标题>/（folder=标题，只复制被引用的图）
+4. 落库   scripts/sync_to_vault.py                    → vault/<公众号目录>/<标题>/（folder=标题，只复制被引用的图）
+5. 索引   scripts/update_index.py                     → 《知识库索引》主题导航里一行（可用 sync_to_vault --update-index 顺带做）
 ```
 
-> 四个环节现已合并进**同一个 skill**（`wechat-article-pipeline`），脚本同处一仓、
+> 五个环节现已合并进**同一个 skill**（`wechat-article-pipeline`），脚本同处一仓、
 > **自包含**、不依赖外部写库引擎。
 > 本 SOP 早期版本写的「转换用 obsidian-markdown、落库用 obsidian-direct」已过时：
 > `obsidian-direct`（ClawHub）已于 2026-09-23 卸载，写库逻辑内联进 `sync_to_vault.py`。
 > 抓取器 2026-09-23 起换成 jackwener/Camoufox 版（原 ClawHub `-v2` Playwright 版已删，
 > `--no-playwright` 降级参数不再存在），并在其上做了两级抓取重构。
+> 落库目录自 2026-11-04 起走**通配解析**（`*公众号`），因为 vault 目录会被加编号前缀或整体搬家。
 
 ---
 
@@ -35,7 +37,7 @@ python3 scripts/verify_wechat_md.py "<项目根>/output/<标题>/<标题>.obsidi
 # 可选：--images "<自定义images目录>"   --strict（把 WARN 也当失败）
 ```
 
-覆盖 7 类**不看原文就能判定**的机械缺陷：
+覆盖 8 类**不看原文就能判定**的机械缺陷：
 
 | # | 检查项 | 命中含义 | 级别 |
 |---|--------|----------|------|
@@ -46,13 +48,22 @@ python3 scripts/verify_wechat_md.py "<项目根>/output/<标题>/<标题>.obsidi
 | 5 | 标题-正文粘连 | 标题里混入中文句末标点后的正文句 | WARN |
 | 6 | 残留远程资源 | 残留 http 图片 / `javascript:;` / CDN 链接 | WARN |
 | 7 | 图片嵌入 vs 文件 | 引用了但文件缺失=FAIL；文件多于引用=仅提示 | FAIL / 提示 |
+| 8 | 三层标签齐全性 | `主题/` `类型/` `来源/` 有一类为空 | WARN |
 
 退出码：`0`=PASS/仅WARN，`2`=FAIL。可接进脚本做门禁。
 
 **判读规则：**
 - **FAIL → 必须处理**：占位符残留、重复块、空块、围栏不闭合、图片缺失。
-- **WARN → 人工过目**：标题粘连（路径/版本号里的点已豁免，剩下的基本是真的）、远程残留。
+- **WARN → 人工过目**：标题粘连（路径/版本号里的点已豁免，剩下的基本是真的）、远程残留、
+  标签缺分面（补一层即可，不影响结构）。
 - 「文件多于引用」是微信常态（二维码/头像/装饰图/分隔线），只提示不扣分。
+
+**第 7、8 条的两个兼容点**（踩过才知道）：
+- 图片对账要同时认 `![[images/x.png]]`（转换产物）与 `![[公众号/标题/images/x.png]]`
+  （落库后被改写成 vault 全路径）。只认前者，落库后的成品会「看起来零引用」而漏检。
+- 标签解析要同时认**无缩进**（`yaml.dump()` 的输出）与 **2 空格缩进**
+  （Obsidian Linter 重排后的存量笔记）。只认一种，就会对另一类文件报「tags 为空」的假告警。
+- 第 8 条只对**已带 frontmatter** 的文件生效 —— 抓取产物没有 YAML 头，会自动跳过。
 
 ---
 

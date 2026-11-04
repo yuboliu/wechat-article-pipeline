@@ -8,14 +8,16 @@ verify_wechat_md.py — 微信文章抓取产物「抓完即校验」Tier-1 确�
     纯本地、零网络、零成本的结构性体检，抓出提取环节常见的机械性缺陷。
     这些缺陷不需要对照原文就能判定，因此可以每篇必跑。
 
-覆盖的 7 类 Tier-1 结构缺陷：
+覆盖的 8 类 Tier-1 结构缺陷：
     1. CODEBLOCK 占位符残留   __CODEBLOCK_i__ / 转义形式 \\_\\_CODEBLOCK\\_i\\_\\_
     2. 重复代码块             多个独立代码块内容完全相同（最典型的“灌错内容”信号）
     3. 空 / 截断代码块        代码块体为空或过短（<=1 有效行 / 极短字符）
     4. 代码围栏不闭合         ``` 数量为奇数
     5. 标题-正文粘连          ## 标题行里混入了整段正文句子
     6. 残留远程资源           http(s) 图片、javascript:;、substackcdn 等抓取瑕疵
-    7. 图片嵌入数 ≠ 文件数    ![[images/x]] 引用数与 images/ 目录实际文件数不符
+    7. 图片嵌入数 ≠ 文件数    ![[…/images/x]] 引用数与 images/ 目录实际文件数不符
+                             （相对写法与 vault 全路径写法都认）
+    8. 三层标签齐全性         frontmatter 是否 主题/ + 类型/ + 来源/ 各至少一个（WARN）
 
 退出码：
     0 = PASS（无问题，或仅有 WARN）
@@ -33,6 +35,26 @@ import argparse
 import os
 import re
 import sys
+
+
+def _fm_tags(text):
+    """复用 tag_infer 的 frontmatter tags 解析（同一份正则，三处共用）。"""
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from tag_infer import parse_frontmatter_tags
+        return parse_frontmatter_tags(text)
+    except Exception:
+        # 兜底：万一 tag_infer 被删/改名，校验器自身不能因此崩掉
+        m = re.match(r"\A---\r?\n(.*?)\r?\n---", text, re.DOTALL)
+        if not m:
+            return []
+        block = re.search(r"^tags:[ \t]*\n((?:[ \t]*-[^\n]*\n?)+)", m.group(1), re.MULTILINE)
+        if not block:
+            return []
+        return [re.sub(r"^[ \t]*-[ \t]*", "", ln).strip()
+                for ln in block.group(1).splitlines() if ln.strip()]
 
 # ---------- 终端着色（Windows 下无 tty 时自动降级为无色） ----------
 _USE_COLOR = sys.stdout.isatty()
@@ -216,7 +238,9 @@ def check_remote_residue(text, rep):
 
 
 def check_image_count(text, images_dir, rep):
-    embeds = re.findall(r"!\[\[images/([^\]]+)\]\]", text)
+    # 两种嵌入形态都要认：转换产物是 `![[images/x.png]]`，落库后会被改写成
+    # `![[公众号/标题/images/x.png]]`（vault 全路径）。只认前一种会漏检后者。
+    embeds = re.findall(r"!\[\[(?:[^\]]*/)?images/([^\]]+)\]\]", text)
     n_embed = len(embeds)
     if not images_dir or not os.path.isdir(images_dir):
         rep.add("图片嵌入数 vs 文件数", WARN,
@@ -240,6 +264,49 @@ def check_image_count(text, images_dir, rep):
     if unused:
         details.append(f"（提示）{len(unused)} 个文件未被引用，多为二维码/装饰图，通常正常：{unused[:6]}")
     rep.add("图片嵌入数 vs 文件数", status, details)
+
+
+def check_tag_facets(text, rep):
+    """frontmatter 的三层分面标签是否齐全（主题 / 类型 / 来源）。
+
+    只对**已经带 frontmatter tags** 的文件生效：
+      * 抓取产物没有 YAML frontmatter（元信息在引用块里），不该被这条命中；
+      * 判 WARN 而非 FAIL —— 标签是「质量项」不是「结构项」，缺了也能落库，
+        只是图谱少一条边，人工过目补上即可。
+    """
+    m = re.match(r"\A---\r?\n(.*?)\r?\n---", text, re.DOTALL)
+    if not m:
+        rep.add("三层标签齐全性", PASS, ["无 frontmatter（抓取产物），跳过"])
+        return
+    fm = m.group(1)
+    if not re.search(r"^tags:", fm, re.MULTILINE):
+        rep.add("三层标签齐全性", WARN, ["frontmatter 里没有 tags 字段"])
+        return
+    # 缩进兼容（无缩进 / 2 空格缩进 / 行内 [a, b]）统一由 tag_infer 处理，
+    # 三处调用方共用同一份解析，避免「一处认缩进、一处不认」。
+    tags = _fm_tags(text)
+    if not tags:
+        rep.add("三层标签齐全性", WARN, ["tags 为空（转换时没给 --tags，自动推断也没结果）"])
+        return
+
+    facets = {"主题": [], "类型": [], "来源": []}
+    other = []
+    for t in tags:
+        head = t.split("/")[0]
+        if head in facets:
+            facets[head].append(t)
+        else:
+            other.append(t)
+
+    details = ["标签 %d 个：%s" % (len(tags), " ".join(tags))]
+    missing = [k for k, v in facets.items() if not v]
+    if other:
+        details.append("非分面标签（自由词）：%s" % " ".join(other))
+    if missing:
+        details.append("缺分面：%s" % "、".join(missing))
+        rep.add("三层标签齐全性", WARN, details + ["（建议补齐：主题/… 类型/… 来源/…）"])
+    else:
+        rep.add("三层标签齐全性", PASS, details)
 
 
 def main():
@@ -271,6 +338,7 @@ def main():
     check_heading_concat(text, rep)
     check_remote_residue(text, rep)
     check_image_count(text, images_dir, rep)
+    check_tag_facets(text, rep)
 
     print(rep.render(os.path.basename(md_path)))
 

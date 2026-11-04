@@ -23,6 +23,19 @@ debug.html
 Thumbs.db
 *.log
 
-# 本机专用（各人机器上的 vault 路径 / 解释器，不入库）
+# 本机配置（vault 路径等隐私，一律走 .env，不入库）
+# 白名单只放行模板 .env.example；其余 .env* 全部忽略，防止 .env.local / .env.bak 漏网。
+.env
+.env.*
+!.env.example
+
+# 本机专用（已降级为兼容层；仍不入库，避免旧机器顺手把路径带进来）
 scripts/local_config.py
 references/LOCAL-NOTES.md
+
+# 备份/临时文件（备份里常含本机路径，别让它被误提交）
+*.bak
+*.orig
+*.rej
+*.swp
+*~

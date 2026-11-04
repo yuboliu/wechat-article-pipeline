@@ -26,5 +26,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
-      - name: Run tests（抓取器 + 转换器，共 166 项；e2e 需联网/浏览器，跳过）
+      - name: Run tests（抓取器 + 转换器 + 配置，共 291 项；e2e 需联网/浏览器，跳过）
         run: python -m pytest tests/ -q -m "not e2e"
+        env:
+          # CI 里没有 .env，走「未配置」分支；测试内部已隔离，不会去读开发者本机配置
+          WECHAT_ENV_FILE: /nonexistent/.env

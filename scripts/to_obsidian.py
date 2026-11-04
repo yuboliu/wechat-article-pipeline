@@ -2,7 +2,10 @@
 """wechat_to_md 产物 -> Obsidian 风格 Markdown。
 
 用法:
-  python to_obsidian.py "<文章目录名>" --tags t1 t2 ... [--date YYYY-MM-DD] [--base DIR]
+  python to_obsidian.py "<文章目录名>" [--tags t1 t2 ...] [--date YYYY-MM-DD] [--base DIR]
+
+  不给 --tags 时用 tag_infer.py 兜底推断三层标签（主题/类型/来源）。正常情况下
+  agent 读完全文后应显式传入；兜底只为保证「不传也不空」。加 --no-auto-tags 可关掉。
 
 输入: <BASE>/<文章目录名>/<文章目录名>.md   (wechat-article-to-markdown 的产物)
 产出: <BASE>/<文章目录名>/<文章目录名>.obsidian.md
@@ -33,11 +36,19 @@ import datetime
 import os
 import re
 import sys
+from pathlib import Path
+
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+import env_config  # noqa: E402
 
 # 2026-09-23：原写死的 `~\WorkBuddy\微信公总号知识库\output` 已不存在，
 # 无 --base 时会静默把 output 重建到死路径（pitfalls #18）。改为跟随当前工作目录，
 # 与抓取器 wechat_article_to_markdown.py 的 DEFAULT_OUTPUT_DIR（cwd/output）保持一致。
-DEFAULT_BASE = os.path.join(os.getcwd(), "output")
+# 2026-11-04：允许用 .env 的 WECHAT_OUTPUT_BASE 覆盖（多机/多工作区时有用）。
+DEFAULT_BASE = env_config.resolve_output_base()
 
 
 def read_fm(text):
@@ -1544,7 +1555,33 @@ def normalize_heading_layout(lines):
     return out
 
 
-def convert(dir_name, base, tags, date_override=None):
+def infer_tags(title, body, notes, max_theme=3):
+    """没给 --tags 时用 tag_infer 兜底推断三层标签。
+
+    正常情况下标签是 agent 读完全文给的（质量最好）；这里只是保证「不给也不空」。
+    推断失败不能阻断流水线 —— 记一条 note 继续跑，人工补。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import tag_infer
+        doc = "# %s\n\n%s" % (title, body)
+        res = tag_infer.infer(doc, max_theme=max_theme)
+        tags = tag_infer.finalize(res)
+        if tags:
+            notes.append("标签自动推断（fallback，建议人工复核）：%s" % " ".join(tags))
+            for w in res.get("warnings") or []:
+                notes.append("  推断提示：" + w)
+        else:
+            notes.append("标签自动推断结果为空，请人工补 --tags")
+        return tags
+    except Exception as e:  # noqa: BLE001 —— 兜底失败不该阻断主流程
+        notes.append("标签自动推断失败（%s），请人工补 --tags" % e)
+        return []
+
+
+def convert(dir_name, base, tags, date_override=None, auto_tags=True, max_theme=3):
     art_dir = os.path.join(base, dir_name)
     src = os.path.join(art_dir, dir_name + ".md")
     dst = os.path.join(art_dir, dir_name + ".obsidian.md")
@@ -1733,11 +1770,18 @@ def convert(dir_name, base, tags, date_override=None):
     text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
 
+    # 标签：没显式给就兜底推断（必须在正文清理之后，否则推广语里的词会污染打分）
+    if not tags and auto_tags:
+        tags = infer_tags(title, text, notes, max_theme=max_theme)
+
     created = datetime.datetime.now().isoformat()
-    fm_out = "---\ncreated: '%s'\ntags:\n%s---\n\n" % (
-        created,
-        "".join("- %s\n" % t for t in tags),
-    )
+    if tags:
+        fm_out = "---\ncreated: '%s'\ntags:\n%s---\n\n" % (
+            created,
+            "".join("- %s\n" % t for t in tags),
+        )
+    else:
+        fm_out = "---\ncreated: '%s'\ntags: []\n---\n\n" % created
     callout = "> [!info] 文章信息\n> **标题**：%s\n" % title
     if author:
         callout += "> **作者**：%s\n" % author
@@ -1745,9 +1789,10 @@ def convert(dir_name, base, tags, date_override=None):
         callout += "> **发布日期**：%s\n" % pubdate
     if source:
         callout += "> **来源**：[微信原文](%s)\n" % source
-    tail = " ".join("#" + t for t in tags)
 
-    out = "%s# %s\n\n%s\n%s\n\n%s\n" % (fm_out, title, callout, text, tail)
+    # 2026-11-04：不再写文末裸 `#标签` 行。用户决定标签只放 frontmatter ——
+    # 文末那行与 frontmatter 内容重复，对图谱没有增量，还多一处要同步的地方。
+    out = "%s# %s\n\n%s\n%s\n" % (fm_out, title, callout, text)
     with open(dst, "w", encoding="utf-8", newline="\n") as f:
         f.write(out)
 
@@ -1762,10 +1807,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir_name", help="文章目录名（output 下的子目录）")
     ap.add_argument("--base", default=DEFAULT_BASE, help="output 根目录")
-    ap.add_argument("--tags", nargs="*", default=[], help="标签")
+    ap.add_argument("--tags", nargs="*", default=[],
+                    help="标签。不给则由 tag_infer 兜底推断（agent 在场时应显式给）")
+    ap.add_argument("--no-auto-tags", action="store_true",
+                    help="不给 --tags 时也不推断，留空（由后续步骤补）")
+    ap.add_argument("--max-theme", type=int, default=3, help="自动推断时最多几个主题标签")
     ap.add_argument("--date", help="覆盖发布日期 (YYYY-MM-DD)")
     a = ap.parse_args()
-    convert(a.dir_name, a.base, a.tags, a.date)
+    if not a.tags and not a.no_auto_tags:
+        print("  (未给 --tags，将自动推断；建议 agent 读完全文后显式传入)")
+    convert(a.dir_name, a.base, a.tags, a.date,
+            auto_tags=not a.no_auto_tags, max_theme=a.max_theme)
 
 
 if __name__ == "__main__":

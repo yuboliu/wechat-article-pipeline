@@ -31,11 +31,15 @@
 | 步骤 | 脚本 | 输入 → 输出 |
 |------|------|-------------|
 | 1 抓取 | `wechat_article_to_markdown.py` | URL → `<BASE>/<目录名>/<目录名>.md` + `images/` |
-| 2 转换 | `scripts/to_obsidian.py` | `.md` → `<目录名>.obsidian.md` |
+| 2 转换 | `scripts/to_obsidian.py` | `.md` → `<目录名>.obsidian.md`（含三层分面标签） |
 | 3 校验 | `scripts/verify_wechat_md.py` | 报告 + 退出码（`0`=PASS / `2`=FAIL），可做落库门禁 |
-| 4 落库 | `scripts/sync_to_vault.py` | `vault/公众号/<标题>/<标题>.md` + 只复制被引用的图 |
+| 4 落库 | `scripts/sync_to_vault.py` | `vault/<公众号目录>/<标题>/<标题>.md` + 只复制被引用的图 |
+| 5 索引 | `scripts/update_index.py` | 笔记 → 《知识库索引》对应主题段落的一行导航 |
 
-推荐顺序：**抓取 → 转换 → 校验 → 落库**（高价值文章可在落库后再校验一次成品）。
+推荐顺序：**抓取 → 转换 → 校验 → 落库 → 索引**（高价值文章可在落库后再校验一次成品）。
+
+标签与索引行摘要由 **agent 读完全文后给**（`--tags` / `--summary`）；`scripts/tag_infer.py`
+是关键词兜底，保证「不给也不空」。
 
 ## 安装
 
@@ -82,6 +86,16 @@ python3 -m venv .venv
 
 ## 使用
 
+### 先做一次配置（只有落库 / 索引需要）
+
+```bash
+python scripts/setup_env.py            # 向导：问 vault 在哪，生成 .env
+python scripts/setup_env.py --check    # 或先体检，看当前解析结果
+```
+
+没配 `.env` 时，落库与索引会**明确报错并给出三种做法**，不会静默写进某个默认目录。
+抓取 / 转换 / 校验不依赖 vault，未配置也能跑。
+
 设 `BASE` 为输出根目录，`D` 为文章目录名（`output/` 下的子目录名，
 **常与文章标题不同**，且可能带空格，命令里务必加引号）。
 
@@ -122,30 +136,49 @@ D="<文章目录名>"
 
 两种模式的 Markdown **逐字节一致**，下游零改动。
 
-### 配置 vault 路径
+### 配置 vault 路径（`.env`）
 
-vault 根 = 装有 `.obsidian` 的目录。你自己的 vault 路径不该进版本库，按优先级取：
+vault 根 = 装有 `.obsidian` 的目录。**这个仓库是公开的**，所以你的路径只能待在本机的
+`.env` 里（已 gitignore），仓库里只留占位符模板 `.env.example`。
+
+```bash
+cp .env.example .env         # 或直接跑向导，自动生成并校验
+python scripts/setup_env.py
+python scripts/setup_env.py --check     # 体检（输出不含完整路径，可安全粘贴）
+```
+
+`.env` 长这样：
+
+```ini
+# 只在本机，不进版本库
+WECHAT_VAULT=D:/MyVault
+WECHAT_SUBFOLDER_PATTERN=*公众号        # 落库一级目录：通配，不写死名字
+WECHAT_INDEX_PATTERN=*知识库索引*.md     # 索引页文件
+```
+
+解析优先级（`scripts/env_config.py`）：
 
 | 优先级 | 来源 | 说明 |
 |---|---|---|
-| 1 | 环境变量 `WECHAT_VAULT` | 临时切换 / CI |
-| 2 | `scripts/local_config.py` | **推荐**，本机专用，已 gitignore |
-| 3 | `~/iNote` | 中性默认 |
+| 1 | 命令行 `--vault` | 单次覆盖 |
+| 2 | 真实环境变量 `WECHAT_VAULT` | 临时切换 / CI（`WECHAT_VAULT=/tmp/x python …` 永远有效） |
+| 3 | 仓库根 `.env` | **推荐**，本机专用 |
+| 4 | 报错并提示怎么配 | 不再有 `~/iNote` 这种「看着能跑、其实写错地方」的默认值 |
 
-```python
-# scripts/local_config.py —— 本机专用，不要提交
-DEFAULT_VAULT = r"D:\MyVault"
-```
+`WECHAT_SUBFOLDER_PATTERN` 用的是**通配而不是固定名**：vault 目录常被加编号前缀
+（`公众号` → `【15】公众号`）或整体搬家，写死就会落空。运行期 glob 唯一候选；
+命中多个时直接报错，不猜。同理 `WECHAT_INDEX_PATTERN` 用来定位那份《知识库索引》。
 
-改 vault 时**只改这个文件**，不要把绝对路径写回 `sync_to_vault.py`
-（否则 `git pull` 次次冲突，push 还会把本机路径公开出去）。
+> 旧的 `scripts/local_config.py` 已降级为兼容层（不再含任何真实路径），
+> 仅为老机器过渡保留；新配置一律进 `.env`。
 
 ## 测试
 
 ```bash
-python -m pytest tests/ -q -m "not e2e"          # 209 项（抓取 61 + 转换 148），无需网络
+python -m pytest tests/ -q -m "not e2e"          # 291 项（抓取 61 + 转换/标签/索引/配置 230），无需网络
 python -m pytest tests/ -q -m e2e                # 联网 e2e（需浏览器运行时）
-python -m unittest discover -s tests/convert -v  # 只跑转换器那 148 项
+python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/配置那 230 项
+python scripts/tag_infer.py --self-test           # 标签词表自检
 ```
 
 抓取器那套是 pytest，转换器那套是 unittest；根目录的 `conftest.py` 已把仓库根与
@@ -244,24 +277,54 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 25. **每篇一个带标题的子文件夹**，否则多篇的 `img_000.png` 会互相覆盖。
 26. **只复制正文真正引用的图片**（推广图 / 二维码留在 `output/` 不落库），
     并在开跑前校验 vault 存在且其下有 `.obsidian`。
-27. **本机路径与代码彻底分离**：vault 根走「环境变量 → `local_config.py` → 中性默认」
-    三级解析，受版本管理的文件里没有任何本机绝对路径 —— 于是**一台机器只需要一份副本**。
+27. **本机路径与代码彻底分离**：vault 根走「命令行 → 环境变量 → 仓库根 `.env` → 报错」，
+    受版本管理的文件里没有任何本机绝对路径 —— 于是**一台机器只需要一份副本**，
+    仓库也能直接公开。缺配置时不是静默回落某个默认目录，而是报错并给出三条具体做法。
+28. **落库目录走通配解析，不写死名字**：`WECHAT_SUBFOLDER_PATTERN=*公众号` 运行期 glob
+    唯一候选（真实命中 `【15】公众号`）。vault 目录会加编号前缀、会整体搬家，写死必炸；
+    多候选时报错而不是猜。
+29. **图片嵌入改写为 vault 全路径**：vault 开了 `alwaysUpdateLinks`，Obsidian 打开笔记就会
+    把 `![[images/x.png]]` 改成 `![[公众号/标题/images/x.png]]`；落库时直接写对，
+    免去「等它改」的空窗期（多篇 `img_001.png` 同名，相对写法在此之前是歧义的）。
+
+### 标签（`scripts/tag_infer.py`）
+
+30. **三层分面**：主题（讲什么）/ 类型（什么体裁）/ 来源（从哪来），每篇至少各一个，
+    词表在 `references/taxonomy.json` —— 与库里的《知识库索引》「一、标签体系」同一份真源。
+31. **体裁判定用「标题级联」而不是关键词加权**：正文里「如何 / 落地 / 模板」出现频率极高，
+    纯加权会把教程判成随笔、把趋势报告判成方案实践。改成按标题优先级级联后，
+    28 篇人工标签样本的命中率从 64% 提到 **86%**。
+32. **主题二级不够分时回退一级**（如 `主题/网络/DNS` → `主题/网络`），落实索引页
+    「二级标签至少覆盖 2 篇才新开」的约定，避免图谱出现只有一篇的孤岛叶节点。
+
+### 索引（`scripts/update_index.py`）
+
+33. **按标签自动落位**到《知识库索引》「二、按主题导航」的对应 `###` 段落与 `**小组**`：
+    段落由「第一个非补充语境的主题标签」决定（`主题/行业/银行` 这类不参与定位）；
+    段落本身是平铺列表时直接追加，**不为单篇新开小组**。
+34. **幂等且不吞人工成果**：同一篇重跑是「更新那一行」；没给 `--display` / `--summary` 时
+    **沿用库里已有值**，不会把手工缩写的显示名和写好的价值点冲掉。`--dry-run` 出 diff。
 
 ### 校验（`scripts/verify_wechat_md.py`）
 
-28. **Tier-1 七项确定性体检**（占位符残留 / 重复代码块 / 空块 / 围栏闭合 / 标题-正文粘连 /
-    残留远程资源 / 图片嵌入与文件对账），纯本地、零网络、零第三方依赖，**退出码可做门禁**
-    （`0`=PASS、`2`=FAIL，FAIL 时禁止落库）。
-29. Tier-1 只证明「结构完整」；需要证明「内容对不对」时按 `references/verify_sop.md`
+35. **Tier-1 八项确定性体检**（占位符残留 / 重复代码块 / 空块 / 围栏闭合 / 标题-正文粘连 /
+    残留远程资源 / 图片嵌入与文件对账 / 三层标签齐全性），纯本地、零网络、零第三方依赖，
+    **退出码可做门禁**（`0`=PASS、`2`=FAIL，FAIL 时禁止落库）。图片对账同时认相对写法与
+    vault 全路径写法；标签检查两种序列缩进都认（`yaml.dump` 无缩进 / Obsidian Linter 2 空格）。
+36. Tier-1 只证明「结构完整」；需要证明「内容对不对」时按 `references/verify_sop.md`
     升级 Tier-2（联网拉原文逐项 diff）。
 
 ### 工程
 
-30. **209 项单测**（抓取 61 + 转换 148），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
-31. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
+37. **291 项单测**（抓取 61 + 转换/标签/索引/配置 230），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
+38. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
     跑一遍确认零命中；更严格的做法是用 `git show HEAD:<旧脚本>` 导出旧版，
     新旧各跑同一批文章两两 diff，把「本次改动的影响」与「上一批规则留下的差异」彻底分开。
-    （`references/pitfalls.md` 的 54 条记录大多就是这么发现并定位的。）
+    （`references/pitfalls.md` 的 63 条记录大多就是这么发现并定位的。）
+39. **配置与代码分离**：`scripts/env_config.py` 一个解析中心，纯标准库实现 `.env`
+    （不引 python-dotenv），优先级「命令行 > 环境变量 > .env > 报错」。
+    `scripts/setup_env.py` 负责生成 + 体检。新增配置项要同时改 `env_config.KEYS`、
+    `.env.example` 与文档，避免三处各说各话。
 
 ## 目录结构
 
@@ -270,15 +333,23 @@ wechat-article-pipeline/
 ├── SKILL.md                         # Agent 用的 skill 定义（工作流 + 触发词）
 ├── README.md
 ├── wechat_article_to_markdown.py    # 抓取（留在根目录，与上游路径对齐）
+├── .env.example                     # ★配置模板（占位符，入库）
+├── .env                             # ★本机真实配置，已 gitignore（绝不入库）
 ├── conftest.py                      # 统一两套测试的 import 路径
 ├── pyproject.toml / requirements.txt
 ├── scripts/
+│   ├── env_config.py                # ★配置解析中心（.env 解析 / 优先级 / 体检）
+│   ├── setup_env.py                 # ★配置向导（生成 .env）
 │   ├── to_obsidian.py               # 转换（纯标准库）
+│   ├── tag_infer.py                 # 标签推断兜底 + frontmatter tags 统一解析（纯标准库）
 │   ├── sync_to_vault.py             # 落库（需 pyyaml）
+│   ├── update_index.py              # 索引登记（纯标准库）
 │   ├── verify_wechat_md.py          # Tier-1 校验（纯标准库）
-│   └── local_config.py              # ★本机专用，已 gitignore
+│   └── local_config.py              # 【已弃用】兼容层，已 gitignore
 ├── references/
-│   ├── pitfalls.md                  # 54 条踩坑记录（改脚本前必读）
+│   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
+│   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
+│   ├── pitfalls.md                  # 63 条踩坑记录（改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器：上游关系 / 本机 camoufox 结论
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -287,7 +358,7 @@ wechat-article-pipeline/
 ├── tests/
 │   ├── test_core.py test_fetch.py   # 抓取器（pytest，61 项）
 │   ├── test_e2e_live.py             # 联网 e2e（默认跳过）
-│   └── convert/                     # 转换器（unittest，148 项）
+│   └── convert/                     # 转换 / 标签 / 索引 / 配置（unittest，230 项）
 └── .github/workflows/ci.yml
 ```
 
