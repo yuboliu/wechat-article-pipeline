@@ -39,3 +39,11 @@ references/LOCAL-NOTES.md
 *.rej
 *.swp
 *~
+
+# 一次性临时脚本与执行计划（默认不入库）
+# 约定仍是「临时脚本写到工作目录，别写进仓库」；这条规则只是兜底：
+# 只要在仓库里临时起了 _debug.py / _plan.json，`git add -A` 也不会把它带上去。
+# `!__*.py` 放行 __init__.py 这类 dunder 文件，避免 `_*.py` 误伤。
+_*.py
+!__*.py
+_*.json
