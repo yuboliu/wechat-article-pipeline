@@ -15,7 +15,7 @@ agent_created: true
 | 1 抓取 | `wechat_article_to_markdown.py` | URL → `<BASE>/<目录名>/<目录名>.md` + `images/` |
 | 2 转换 | `scripts/to_obsidian.py` | 上一步的 `.md` → `<目录名>.obsidian.md`（含三层分面标签） |
 | 3 校验 | `scripts/verify_wechat_md.py` | `.obsidian.md` → 报告 + 退出码（0=PASS / 2=FAIL） |
-| 4 落库 | `scripts/sync_to_vault.py` | `.obsidian.md` → `vault/<公众号目录>/<标题>/<标题>.md` + 被引用的图 |
+| 4 落库 | `scripts/sync_to_vault.py` | `.obsidian.md` → `vault/<公众号目录>/【NNN】<标题>/【NNN】<标题>.md` + 被引用的图 |
 | 5 索引 | `scripts/update_index.py` | 笔记 → 《知识库索引》里对应主题段落的一行导航 |
 | 5.5 计数 | `scripts/tag_stats.py` | 全库 frontmatter → 重算「一、标签体系」的覆盖计数（第 5 步写盘后自动跑） |
 
@@ -194,8 +194,11 @@ D="<文章目录名>"                                      # output/ 下的子�
       --summary "从词袋检索到图推理的框架演进与选型" --display "从 RAGFlow 到 GraphRAG"
 ```
 
-- 落点 `vault/<subfolder>/<标题>/<标题>.md`；`--subfolder` 改中间那级，
-  `--folder` 直接指定最终子目录（默认 `<subfolder>/<标题>`）。
+- 落点 `vault/<subfolder>/【NNN】<标题>/【NNN】<标题>.md`；`--subfolder` 改中间那级，
+  `--folder` 直接指定最终子目录。
+- **编号约定**：`【001】` 起、三位、**目录内**按创建时间递增。重跑同一篇会认出
+  `【NNN】<标题>` 并复用它（不会新建未编号的孪生目录）；新笔记取目录内最大号 +1。
+  想让某篇换号（如补录的老文章要插到前面），只能重排并同步改链接 —— 见 pitfalls #68。
   **每篇必须是带标题的独立子文件夹**，否则同名 `img_000.png` 互相覆盖。
 - **`--subfolder` 默认走通配解析**，不写死目录名：`.env` 里的 `WECHAT_SUBFOLDER_PATTERN=*公众号`
   会在运行期 glob 唯一候选 —— 因为 vault 目录会加编号前缀、会整体搬家
@@ -298,7 +301,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 67 条踩坑记录（动手改脚本前必读）
+│   ├── pitfalls.md                  # 68 条踩坑记录（动手改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器本机注意（camoufox 结论等）
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -314,7 +317,7 @@ wechat-article-pipeline/
 ## 测试与回归
 
 ```bash
-"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 312 项（311 通过 + 1 跳过），无需网络
+"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 320 项（319 通过 + 1 跳过），无需网络
 "$PY" -m pytest tests/ -q -m e2e              # 联网 e2e（需浏览器运行时）
 "$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 244 项
 "$PY" scripts/tag_infer.py --self-test         # 词表自检（结构 + 每个二级≥2 关键词）

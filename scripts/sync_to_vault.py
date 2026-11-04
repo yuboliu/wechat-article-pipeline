@@ -12,7 +12,9 @@
     默认值按「命令行 > 环境变量 WECHAT_VAULT > 仓库根 .env > 报错」解析，
     所以「本机 vault 在哪」属于本机配置，不进版本库（见 scripts/env_config.py）。
     首次使用先跑 `python scripts/setup_env.py` 生成 .env。
-  * 笔记落点 = vault/<subfolder>/<标题>/<标题>.md，默认 subfolder=公众号。
+  * 笔记落点 = vault/<subfolder>/【NNN】<标题>/【NNN】<标题>.md，默认 subfolder=公众号。
+    编号按目录内创建顺序三位递增；重跑同一篇会复用已有编号（幂等），
+    新笔记接在最大号后面。`--no-number` 可退回不带编号的老布局。
     这样才能让图片嵌入正确解析，否则图片会全挤进 vault/images/ 互相覆盖。
   * 只复制正文真正引用到的图片，推广图/二维码不复制（保持 vault 干净）。
   * 图片嵌入默认改写成 **vault 全路径**（`![[公众号/标题/images/x.png]]`）。
@@ -114,6 +116,37 @@ def create_note(vault: Path, title: str, content: str = "", folder: str = None,
     return note_path
 
 
+# vault 的命名约定：`【001】标题`。编号是**目录内按创建时间**的三位序号。
+NUM_PREFIX = re.compile(r"^【(\d{3})】")
+
+
+def find_numbered(parent: Path, title: str):
+    """parent 下是否已有 `【NNN】title` 目录，有则返回 (目录名, 序号)。
+
+    重跑同一篇必须复用它，否则会新建一个未编号的孪生目录 —— 库里出现两份笔记。
+    """
+    if not parent.is_dir():
+        return None
+    for d in sorted(parent.iterdir()):
+        if not d.is_dir():
+            continue
+        m = NUM_PREFIX.match(d.name)
+        if m and d.name[m.end():] == title:
+            return d.name, int(m.group(1))
+    return None
+
+
+def next_number(parent: Path) -> int:
+    """parent 下已有最大三位序号 + 1；没有则从 1 开始。"""
+    top = 0
+    if parent.is_dir():
+        for d in parent.iterdir():
+            m = NUM_PREFIX.match(d.name)
+            if d.is_dir() and m:
+                top = max(top, int(m.group(1)))
+    return top + 1
+
+
 # 旧版流水线在文末写的那行裸实体标签（`#MPLS #SRv6 #路由`）。整行只有 #词。
 _TAIL_TAG_RE = re.compile(r"^#[^\s#]+(?:\s+#[^\s#]+)+\s*$")
 
@@ -203,7 +236,9 @@ def main():
     ap.add_argument("--subfolder", default=None,
                     help="vault 下的一级分类目录；默认按 WECHAT_SUBFOLDER_PATTERN "
                          "通配解析（可匹配「【15】公众号」这类带前缀目录），回落「公众号」")
-    ap.add_argument("--folder", help="vault 下的最终子目录（默认=<subfolder>/<标题>）")
+    ap.add_argument("--folder", help="vault 下的最终子目录（默认=<subfolder>/【NNN】<标题>）")
+    ap.add_argument("--no-number", action="store_true",
+                    help="不给目录/文件名加 【NNN】 序号（默认按目录内创建时间自动编号）")
     ap.add_argument("--relative-links", action="store_true",
                     help="图片保持 ![[images/x.png]] 相对写法，不改成 vault 全路径")
     ap.add_argument("--update-index", action="store_true",
@@ -234,7 +269,23 @@ def main():
         print("  标题含文件系统非法字符，路径已转义：%s" % safe_title)
 
     subfolder = resolve_subfolder(a.subfolder)
-    folder = a.folder or "%s/%s" % (subfolder, safe_title)
+    folder = a.folder
+    final_title = safe_title
+    if not folder:
+        # 命名约定：<subfolder>/【NNN】标题/【NNN】标题.md
+        # 重跑同一篇 → 复用已有编号（幂等）；新笔记 → 接在最大号后面。
+        if a.no_number:
+            folder = "%s/%s" % (subfolder, safe_title)
+        else:
+            hit = find_numbered(vault / subfolder, safe_title)
+            if hit:
+                final_title = hit[0]
+                print("  复用已编号目录：%s（第 %03d 号）" % (final_title, hit[1]))
+            else:
+                n = next_number(vault / subfolder)
+                final_title = "【%03d】%s" % (n, safe_title)
+                print("  新建编号：%s" % final_title)
+            folder = "%s/%s" % (subfolder, final_title)
     print("VAULT :", vault)
     print("FOLDER:", folder)
 
@@ -243,7 +294,7 @@ def main():
         if n_img:
             print("  图片嵌入改写为 vault 全路径：%d 张" % n_img)
 
-    note_path = create_note(vault, safe_title, body, folder=folder, tags=tags)
+    note_path = create_note(vault, final_title, body, folder=folder, tags=tags)
     # 保底：万一将来换回会翻 \n 的写入方式，这里统一回 LF，避免同批笔记出现两种换行符。
     raw = note_path.read_bytes()
     if b"\r\n" in raw:
@@ -281,7 +332,7 @@ def main():
         if not a.summary:
             print("  WARN: 没给 --summary，导航行只有 [[链接]] 没有一句话价值点。"
                   "agent 读完全文后应补上并重跑本参数。")
-        ui.update_index(idx_path, tags, title, display=a.display, summary=a.summary,
+        ui.update_index(idx_path, tags, note_path.stem, display=a.display, summary=a.summary,
                         section=a.section, subgroup=a.subgroup)
 
 

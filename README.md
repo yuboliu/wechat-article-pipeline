@@ -33,7 +33,7 @@
 | 1 抓取 | `wechat_article_to_markdown.py` | URL → `<BASE>/<目录名>/<目录名>.md` + `images/` |
 | 2 转换 | `scripts/to_obsidian.py` | `.md` → `<目录名>.obsidian.md`（含三层分面标签） |
 | 3 校验 | `scripts/verify_wechat_md.py` | 报告 + 退出码（`0`=PASS / `2`=FAIL），可做落库门禁 |
-| 4 落库 | `scripts/sync_to_vault.py` | `vault/<公众号目录>/<标题>/<标题>.md` + 只复制被引用的图 |
+| 4 落库 | `scripts/sync_to_vault.py` | `vault/<公众号目录>/【NNN】<标题>/【NNN】<标题>.md` + 只复制被引用的图 |
 | 5 索引 | `scripts/update_index.py` | 笔记 → 《知识库索引》对应主题段落的一行导航 |
 | 5.5 计数 | `scripts/tag_stats.py` | 全库 frontmatter → 重算「一、标签体系」各项覆盖计数（第 5 步写盘后自动跑） |
 
@@ -119,7 +119,7 @@ D="<文章目录名>"
 
 # 4) 落库
 "$PY" scripts/sync_to_vault.py "$D" --base "$BASE"
-#    落点 vault/<subfolder>/<标题>/<标题>.md：
+#    落点 vault/<subfolder>/【NNN】<标题>/【NNN】<标题>.md：
 #    --subfolder 改中间那级（默认「公众号」）、--folder 直接指定最终子目录
 ```
 
@@ -176,7 +176,7 @@ WECHAT_INDEX_PATTERN=*知识库索引*.md     # 索引页文件
 ## 测试
 
 ```bash
-python -m pytest tests/ -q -m "not e2e"          # 312 项（311 通过 + 1 跳过），无需网络
+python -m pytest tests/ -q -m "not e2e"          # 320 项（319 通过 + 1 跳过），无需网络
 python -m pytest tests/ -q -m e2e                # 联网 e2e（需浏览器运行时）
 python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/统计/配置那 244 项
 python scripts/tag_infer.py --self-test           # 标签词表自检
@@ -332,11 +332,11 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 
 ### 工程
 
-41. **312 项单测**（311 通过 + 1 跳过），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
+41. **320 项单测**（319 通过 + 1 跳过），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
 42. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
     跑一遍确认零命中；更严格的做法是用 `git show HEAD:<旧脚本>` 导出旧版，
     新旧各跑同一批文章两两 diff，把「本次改动的影响」与「上一批规则留下的差异」彻底分开。
-    （`references/pitfalls.md` 的 67 条记录大多就是这么发现并定位的。）
+    （`references/pitfalls.md` 的 68 条记录大多就是这么发现并定位的。）
 43. **配置与代码分离**：`scripts/env_config.py` 一个解析中心，纯标准库实现 `.env`
     （不引 python-dotenv），优先级「命令行 > 环境变量 > .env > 报错」。
     `scripts/setup_env.py` 负责生成 + 体检。新增配置项要同时改 `env_config.KEYS`、
@@ -366,7 +366,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 67 条踩坑记录（改脚本前必读）
+│   ├── pitfalls.md                  # 68 条踩坑记录（改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器：上游关系 / 本机 camoufox 结论
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
