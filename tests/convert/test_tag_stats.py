@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """标签体系计数重算（scripts/tag_stats.py）的回归测试（纯标准库）。
 
-这里守三件事：
-  * 只改数字 —— 标签名、顺序、判定标准等人工内容不能被碰；
+这里守五件事：
+  * 只改数字与条目 —— 标签名、行顺序、判定标准等人工内容不能被碰；
   * 幂等 —— 同一份 vault 跑第二遍零改动；
-  * 两种显示写法都要认 —— 主题表里的短名（`智能体`）与「其他」行里的
-    半截路径（`行业/银行` → 库里实际是 `主题/行业/银行`）。
+  * 三种显示写法都要认 —— 短名（`智能体`）、半截路径（`行业/银行` →
+    库里 `主题/行业/银行`）、完整路径；
+  * 不漏项 —— 库里有一级标签而表里没这一行时，必须补整行；
+  * 不猜 —— 同名多义时报错，绝不静默取 0。
 """
 import os
 import sys
@@ -36,9 +38,9 @@ tags:
 | 一级 | 二级标签（覆盖笔记数） |
 | ---- | ---- |
 | `主题/AI` | 智能体 5 · RAG 5 |
-| `主题/AI` | 智能体 1 · RAG 1 |
 | `主题/政治` | 暂为一级标签（9 篇），达 2 篇后开二级 |
-| 其他 | `行业/银行` 7 · `管理` 7 |
+| `主题/行业` | 银行 7 |
+| `主题/管理` | 一级直挂（7 篇）——暂无二级 |
 
 ### 2. 类型 `类型/…`
 
@@ -102,10 +104,10 @@ class TagStatsTest(unittest.TestCase):
         t = _norm(self._text())
         # 智能体 2 篇、RAG 1 篇；顺序按数量降序
         self.assertIn("智能体 2 · RAG 1", t)
-        # 半截路径 `行业/银行` 要能对上库里的 `主题/行业/银行`
-        self.assertIn("`行业/银行` 1", t)
-        # `管理` 是裸名，按末段同名唯一匹配
-        self.assertIn("`管理` 1", t)
+        # 半截路径/短名都要能对上库里的完整标签
+        self.assertIn("`主题/行业` | 银行 1", t)
+        # 一级直挂：`主题/管理` 被 1 篇笔记直接使用
+        self.assertIn("一级直挂（1 篇）——暂无二级", t)
         # 政治行只改括号里的数，说明性文字原样保留
         self.assertIn("暂为一级标签（1 篇），达 2 篇后开二级", t)
         # 类型 / 来源（表格单元格按显示宽度补过空格，比对前先归一化）
@@ -114,6 +116,43 @@ class TagStatsTest(unittest.TestCase):
         # 总量与分布：4 = 3 篇笔记 + 索引页自身
         self.assertIn("全库 **4 篇笔记**", t)
         self.assertIn("`【15】公众号` 2", t)
+
+    def test_missing_l1_row_appended(self):
+        """库里出现了表里没有的一级标签 → 必须补整行，否则这部分笔记不计入任何数字。"""
+        (self.vault / "【15】公众号" / "f.md").write_text(
+            _note(["主题/安全/攻防", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        ts.refresh(self.index, self.vault, apply=True)
+        t = _norm(self._text())
+        self.assertIn("`主题/安全` | 攻防 1", t)
+
+    def test_direct_l1_count_updated(self):
+        """一级直挂的篇数也要跟着库走。"""
+        (self.vault / "【15】公众号" / "g.md").write_text(
+            _note(["主题/管理", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        ts.refresh(self.index, self.vault, apply=True)
+        self.assertIn("一级直挂（2 篇）", _norm(self._text()))
+
+    def test_ambiguous_short_name_raises(self):
+        """同名不同路径时不能猜：要么写成完整路径，要么报错中止。"""
+        (self.vault / "【15】公众号" / "h.md").write_text(
+            _note(["主题/工程/提示词", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        (self.vault / "【15】公众号" / "i.md").write_text(
+            _note(["主题/金融/提示词", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        text = self._text().replace("智能体 5 · RAG 5", "智能体 5 · 提示词 5")
+        self.index.write_text(text, encoding="utf-8")
+        with self.assertRaises(ts.AmbiguousTag):
+            ts.refresh(self.index, self.vault, apply=True)
+
+    def test_ambiguous_full_path_ok(self):
+        """写成完整路径就没有歧义，能精准计数。"""
+        (self.vault / "【15】公众号" / "h.md").write_text(
+            _note(["主题/工程/提示词", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        (self.vault / "【15】公众号" / "i.md").write_text(
+            _note(["主题/金融/提示词", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        text = self._text().replace("智能体 5 · RAG 5", "智能体 5 · `主题/工程/提示词` 5")
+        self.index.write_text(text, encoding="utf-8")
+        ts.refresh(self.index, self.vault, apply=True)
+        self.assertIn("`主题/工程/提示词` 1", _norm(self._text()))
 
     def test_idempotent(self):
         ts.refresh(self.index, self.vault, apply=True)
@@ -146,16 +185,28 @@ class TagStatsTest(unittest.TestCase):
         self.assertIn("`类型/趋势解读`", t)
         self.assertIn("（待补判定标准）", t)
 
-    def test_zero_kept_by_default_pruned_on_demand(self):
-        """库里数不到的二级：默认保留并置 0，加 prune_zero 才删。"""
+    def test_zero_pruned_by_default(self):
+        """库里数不到的二级：默认删掉（索引只列真实存在的）。"""
         ts.refresh(self.index, self.vault, apply=True)
         # 把唯一带 RAG 的笔记改掉，RAG 计数应归零
         (self.vault / "【15】公众号" / "b.md").write_text(
             _note(["主题/AI/智能体", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
         ts.refresh(self.index, self.vault, apply=True)
-        self.assertIn("RAG 0", self._text(), "默认应保留该项并置 0")
-        ts.refresh(self.index, self.vault, apply=True, prune_zero=True)
-        self.assertNotIn("RAG 0", self._text())
+        self.assertNotIn("RAG", self._text(), "默认应删除该项")
+
+    def test_keep_zero_keeps_zero(self):
+        ts.refresh(self.index, self.vault, apply=True)
+        (self.vault / "【15】公众号" / "b.md").write_text(
+            _note(["主题/AI/智能体", "类型/技术教程", "来源/微信公众号"]), encoding="utf-8")
+        ts.refresh(self.index, self.vault, apply=True, keep_zero=True)
+        self.assertIn("RAG 0", self._text())
+
+    def test_empty_l1_row_removed(self):
+        """一级标签在库里彻底消失时，整行删掉，不留 0。"""
+        (self.vault / "c.md").write_text(
+            _note(["类型/索引", "来源/个人整理"]), encoding="utf-8")
+        ts.refresh(self.index, self.vault, apply=True)
+        self.assertNotIn("主题/政治", self._text())
 
     def test_dot_dirs_ignored(self):
         """`.claudian` 这类工具目录不能计入全库篇数。"""
