@@ -17,6 +17,7 @@ agent_created: true
 | 3 校验 | `scripts/verify_wechat_md.py` | `.obsidian.md` → 报告 + 退出码（0=PASS / 2=FAIL） |
 | 4 落库 | `scripts/sync_to_vault.py` | `.obsidian.md` → `vault/<公众号目录>/<标题>/<标题>.md` + 被引用的图 |
 | 5 索引 | `scripts/update_index.py` | 笔记 → 《知识库索引》里对应主题段落的一行导航 |
+| 5.5 计数 | `scripts/tag_stats.py` | 全库 frontmatter → 重算「一、标签体系」的覆盖计数（第 5 步写盘后自动跑） |
 
 推荐顺序：**配置（仅首次）→ 抓取 → 转换 → 校验 → 落库 →（落库时顺手）索引**（高价值文章可在落库后再跑一次校验）。
 校验失败**不要落库** —— 结构缺陷一旦进 vault，后面很难察觉。
@@ -242,9 +243,30 @@ D="<文章目录名>"                                      # output/ 下的子�
 - **幂等**：同一篇重跑是「更新那一行」，不会变成两行。
 - **不会覆盖你的人工成果**：重跑时若没给 `--display` / `--summary`，会**沿用库里已有的值**，
   不会把手工缩写过的显示名冲掉。
-- 只改「二、按主题导航」。上方「一、标签体系」的表**仍归人工维护**：脚本会发现
-  未登记的标签并打印提醒，但不擅自重写那些带计数的表格。
+- 只改「二、按主题导航」；写盘后会自动跑一次第 5.5 步重算「一、标签体系」的计数
+  （不想要时加 `--no-stats`）。
 - `--dry-run` 打印 unified diff 不写盘；`--section/--subgroup` 可强制指定落位。
+
+## 5.5 标签体系计数（写盘后自动，也可单独跑）
+
+```bash
+"$PY" scripts/tag_stats.py --vault "<vault>"            # 干跑：只打印差异
+"$PY" scripts/tag_stats.py --vault "<vault>" --apply    # 落盘
+```
+
+从**全库 frontmatter** 重算「一、标签体系」里那些会随笔记增减而失真的数字：
+表头「全库 **N 篇笔记**」、`分布：` 行各目录篇数、三个分面的覆盖计数。
+
+三条红线（改动前先读 `references/pitfalls.md` #65）：
+
+1. **只改数字**。标签名、顺序、判定标准、说明文字全部原样保留 ——
+   覆盖数是事实（能算），判定标准是判断（只能人写）。
+2. **不删除**。数不到就置 0 并提示确认，不抹掉整项；确实要清才加 `--prune-zero`。
+3. **两套写法都要认**：主题表里是短名 `智能体`（→ `主题/AI/智能体`），
+   「其他」行里是半截路径 `` `行业/银行` ``（→ 库里实际是 `主题/行业/银行`）。
+
+段落里没有的新二级 / 新类型会**追加**并提示补判定标准；点开头的目录（`.claudian` 等）
+不计入篇数。表格重排按**显示宽度**（CJK 按 2 计），否则中文列会错位。
 
 ## 目录结构
 
@@ -261,12 +283,13 @@ wechat-article-pipeline/
 │   ├── tag_infer.py                 # 标签推断兜底 + frontmatter tags 统一解析（纯标准库）
 │   ├── sync_to_vault.py             # 落库（需 pyyaml）
 │   ├── update_index.py              # 索引登记（纯标准库）
+│   ├── tag_stats.py                 # 标签体系计数重算（纯标准库）
 │   ├── verify_wechat_md.py          # Tier-1 校验（纯标准库）
 │   └── local_config.py              # 【已弃用】兼容层，已 gitignore（无真实路径）
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 63 条踩坑记录（动手改脚本前必读）
+│   ├── pitfalls.md                  # 66 条踩坑记录（动手改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器本机注意（camoufox 结论等）
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -282,11 +305,12 @@ wechat-article-pipeline/
 ## 测试与回归
 
 ```bash
-"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 291 项（抓取 61 + 转换 230），无需网络
+"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 305 项（抓取 61 + 转换 244），无需网络
 "$PY" -m pytest tests/ -q -m e2e              # 联网 e2e（需浏览器运行时）
-"$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 230 项
+"$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 244 项
 "$PY" scripts/tag_infer.py --self-test         # 词表自检（结构 + 每个二级≥2 关键词）
 "$PY" scripts/setup_env.py --check             # 配置体检（不含完整路径，可安全粘贴）
+"$PY" scripts/tag_stats.py --vault "<vault>"   # 标签体系计数干跑（有差异才需要 --apply）
 ```
 
 - 抓取器那套是 **pytest**，转换器那套是 **unittest**；`conftest.py` 已把仓库根与 `scripts/`

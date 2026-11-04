@@ -114,6 +114,33 @@ def create_note(vault: Path, title: str, content: str = "", folder: str = None,
     return note_path
 
 
+# 旧版流水线在文末写的那行裸实体标签（`#MPLS #SRv6 #路由`）。整行只有 #词。
+_TAIL_TAG_RE = re.compile(r"^#[^\s#]+(?:\s+#[^\s#]+)+\s*$")
+
+
+def strip_tail_tags(body):
+    """去掉文末的裸实体标签行。返回 (新正文, 是否删了)。
+
+    为什么落库时还要再删一次：新版 to_obsidian 已不生成这行，但 `output/` 里
+    **旧产物**（2026-11-04 之前转的 17 篇）仍带着。直接重新落库就会把它抄回 vault ——
+    实测就有 17 篇是这么复活的。这里做一道幂等的兜底。
+
+    只认「最后一个非空行」且整行只由 `#词` 组成；正文中间的同类行一律不动。
+    """
+    lines = body.splitlines()
+    idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip():
+            idx = i
+            break
+    if idx is None or not _TAIL_TAG_RE.match(lines[idx]):
+        return body, False
+    del lines[idx]
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines) + "\n", True
+
+
 def extract(text):
     m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not m:
@@ -132,6 +159,10 @@ def extract(text):
     if not mh:
         raise SystemExit("未找到 H1 标题")
     title = mh.group(1).strip()
+
+    body, dropped = strip_tail_tags(body)
+    if dropped:
+        print("  已移除文末裸标签行（旧产物的遗留，见 pitfalls #64）")
 
     return title, tags, body.lstrip("\n")
 

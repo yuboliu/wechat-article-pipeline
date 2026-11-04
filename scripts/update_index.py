@@ -294,7 +294,8 @@ def unregistered_tags(text, tags):
 # 主流程
 # --------------------------------------------------------------------------
 def update_index(index_path, tags, title, display=None, summary=None,
-                 section=None, subgroup=None, layout_path=None, dry_run=False):
+                 section=None, subgroup=None, layout_path=None, dry_run=False,
+                 refresh_stats=True):
     layout_path = env_config.resolve_index_layout(layout_path)
     with open(layout_path, "r", encoding="utf-8") as f:
         layout = json.load(f)
@@ -386,6 +387,17 @@ def update_index(index_path, tags, title, display=None, summary=None,
     else:
         index_path.write_text(out, encoding="utf-8", newline="\n")
         print("INDEX:", index_path)
+        # 新增/改动条目后，「一、标签体系」里的覆盖计数就失真了。
+        # 顺手重算（vault 根 = 索引所在目录），避免这些数字长期靠人工追。
+        if refresh_stats:
+            try:
+                import tag_stats
+                n = tag_stats.refresh(index_path, index_path.parent, apply=True, quiet=True)
+                if n:
+                    print("TAGS: 已同步「一、标签体系」计数 %d 处" % n)
+                out = index_path.read_text(encoding="utf-8")
+            except Exception as e:          # 统计失败不该让落库流程失败
+                print("  WARN: 标签体系计数同步失败（不影响索引条目）：%s" % e)
 
     for n in notes:
         print("  ·", n)
@@ -424,6 +436,8 @@ def main():
     ap.add_argument("--subgroup", help="强制指定小组（如 DNS）")
     ap.add_argument("--layout", help="index_layout.json 路径")
     ap.add_argument("--dry-run", action="store_true", help="只打印 diff，不写盘")
+    ap.add_argument("--no-stats", action="store_true",
+                    help="不同步「一、标签体系」的覆盖计数（默认写盘后自动重算）")
     a = ap.parse_args()
 
     title, tags = a.title, list(a.tags)
@@ -447,7 +461,8 @@ def main():
 
     sys.exit(update_index(index_path, tags, title, display=a.display, summary=a.summary,
                           section=a.section, subgroup=a.subgroup,
-                          layout_path=a.layout, dry_run=a.dry_run))
+                          layout_path=a.layout, dry_run=a.dry_run,
+                          refresh_stats=not a.no_stats))
 
 
 if __name__ == "__main__":

@@ -17,8 +17,8 @@
     export KEY=value
     KEY="带空格或 # 的值"
     KEY='单引号不展开变量'
-    KEY=~/vaults/iNote          # 支持 ~ 展开
-    KEY=${HOME}/vaults/iNote    # 支持 ${VAR} 引用已解析的值
+    KEY=~/vaults/MyVault        # 支持 ~ 展开
+    KEY=${HOME}/vaults/MyVault  # 支持 ${VAR} 引用已解析的值
 
 不支持的：多行值、\n 转义、嵌套引用 —— 出现这些就说明该换格式了，别在这里硬撑。
 

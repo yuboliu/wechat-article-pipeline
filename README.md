@@ -35,6 +35,7 @@
 | 3 校验 | `scripts/verify_wechat_md.py` | 报告 + 退出码（`0`=PASS / `2`=FAIL），可做落库门禁 |
 | 4 落库 | `scripts/sync_to_vault.py` | `vault/<公众号目录>/<标题>/<标题>.md` + 只复制被引用的图 |
 | 5 索引 | `scripts/update_index.py` | 笔记 → 《知识库索引》对应主题段落的一行导航 |
+| 5.5 计数 | `scripts/tag_stats.py` | 全库 frontmatter → 重算「一、标签体系」各项覆盖计数（第 5 步写盘后自动跑） |
 
 推荐顺序：**抓取 → 转换 → 校验 → 落库 → 索引**（高价值文章可在落库后再校验一次成品）。
 
@@ -175,9 +176,9 @@ WECHAT_INDEX_PATTERN=*知识库索引*.md     # 索引页文件
 ## 测试
 
 ```bash
-python -m pytest tests/ -q -m "not e2e"          # 291 项（抓取 61 + 转换/标签/索引/配置 230），无需网络
+python -m pytest tests/ -q -m "not e2e"          # 305 项（抓取 61 + 转换/标签/索引/配置/统计 244），无需网络
 python -m pytest tests/ -q -m e2e                # 联网 e2e（需浏览器运行时）
-python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/配置那 230 项
+python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/统计/配置那 244 项
 python scripts/tag_infer.py --self-test           # 标签词表自检
 ```
 
@@ -305,23 +306,34 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 34. **幂等且不吞人工成果**：同一篇重跑是「更新那一行」；没给 `--display` / `--summary` 时
     **沿用库里已有值**，不会把手工缩写的显示名和写好的价值点冲掉。`--dry-run` 出 diff。
 
+### 标签体系计数（`scripts/tag_stats.py`）
+
+35. **覆盖计数不再靠人工追**。「一、标签体系」里的「全库 N 篇笔记」、`分布：` 各目录篇数、
+    三个分面的计数，都从全库 frontmatter 重算；第 5 步写盘后自动跑一次，也可单独运行。
+    实测它当场找出了两处没人发现的漂移（`宏观 8`→7、`类型/模板 2`→1）。
+36. **只改数字、不删项**。标签名、顺序、判定标准、说明文字全部原样保留；数不到就置 0
+    并提示「是笔记被移走还是改名」，要真正清掉得显式加 `--prune-zero`。
+37. **两套显示写法都认**：主题表里是短名 `智能体`（→ `主题/AI/智能体`），「其他」行里是
+    半截路径 `` `行业/银行` ``（→ 库里实际是 `主题/行业/银行`）。只认一种会把 10 篇算成 0。
+    表格重排按**显示宽度**（CJK 按 2 计），否则中文列全部错位。
+
 ### 校验（`scripts/verify_wechat_md.py`）
 
-35. **Tier-1 八项确定性体检**（占位符残留 / 重复代码块 / 空块 / 围栏闭合 / 标题-正文粘连 /
+38. **Tier-1 八项确定性体检**（占位符残留 / 重复代码块 / 空块 / 围栏闭合 / 标题-正文粘连 /
     残留远程资源 / 图片嵌入与文件对账 / 三层标签齐全性），纯本地、零网络、零第三方依赖，
     **退出码可做门禁**（`0`=PASS、`2`=FAIL，FAIL 时禁止落库）。图片对账同时认相对写法与
     vault 全路径写法；标签检查两种序列缩进都认（`yaml.dump` 无缩进 / Obsidian Linter 2 空格）。
-36. Tier-1 只证明「结构完整」；需要证明「内容对不对」时按 `references/verify_sop.md`
+39. Tier-1 只证明「结构完整」；需要证明「内容对不对」时按 `references/verify_sop.md`
     升级 Tier-2（联网拉原文逐项 diff）。
 
 ### 工程
 
-37. **291 项单测**（抓取 61 + 转换/标签/索引/配置 230），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
-38. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
+40. **305 项单测**（抓取 61 + 转换/标签/索引/配置/统计 244），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
+41. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
     跑一遍确认零命中；更严格的做法是用 `git show HEAD:<旧脚本>` 导出旧版，
     新旧各跑同一批文章两两 diff，把「本次改动的影响」与「上一批规则留下的差异」彻底分开。
-    （`references/pitfalls.md` 的 63 条记录大多就是这么发现并定位的。）
-39. **配置与代码分离**：`scripts/env_config.py` 一个解析中心，纯标准库实现 `.env`
+    （`references/pitfalls.md` 的 66 条记录大多就是这么发现并定位的。）
+42. **配置与代码分离**：`scripts/env_config.py` 一个解析中心，纯标准库实现 `.env`
     （不引 python-dotenv），优先级「命令行 > 环境变量 > .env > 报错」。
     `scripts/setup_env.py` 负责生成 + 体检。新增配置项要同时改 `env_config.KEYS`、
     `.env.example` 与文档，避免三处各说各话。
@@ -344,12 +356,13 @@ wechat-article-pipeline/
 │   ├── tag_infer.py                 # 标签推断兜底 + frontmatter tags 统一解析（纯标准库）
 │   ├── sync_to_vault.py             # 落库（需 pyyaml）
 │   ├── update_index.py              # 索引登记（纯标准库）
+│   ├── tag_stats.py                 # 标签体系计数重算（纯标准库）
 │   ├── verify_wechat_md.py          # Tier-1 校验（纯标准库）
 │   └── local_config.py              # 【已弃用】兼容层，已 gitignore
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 63 条踩坑记录（改脚本前必读）
+│   ├── pitfalls.md                  # 66 条踩坑记录（改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器：上游关系 / 本机 camoufox 结论
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -358,7 +371,7 @@ wechat-article-pipeline/
 ├── tests/
 │   ├── test_core.py test_fetch.py   # 抓取器（pytest，61 项）
 │   ├── test_e2e_live.py             # 联网 e2e（默认跳过）
-│   └── convert/                     # 转换 / 标签 / 索引 / 配置（unittest，230 项）
+│   └── convert/                     # 转换 / 标签 / 索引 / 统计 / 配置（unittest，244 项）
 └── .github/workflows/ci.yml
 ```
 
