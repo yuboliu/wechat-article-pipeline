@@ -317,3 +317,65 @@ class TestPromoNav(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPromoTailHeading(unittest.TestCase):
+    """标题式文末页脚（find_promo_tail_heading）。
+
+    样本：华泰「2027 年度展望 | 转债」那篇，尾部是 `**关注我们**` + 二维码 +
+    研究 Portal 链接 + 整段免责声明 —— 32 行、987 字符。旧规则只认**行内句式**
+    （「关注……公众号」「扫码」「点击阅读原文」），「关注我们」四个字后面没有
+    「公众号」，整段页脚连免责声明一起留在了笔记里（pitfalls #70）。
+
+    这里守两条边界：页脚要认得出，正文自己写的同名小节不能碰。
+    """
+
+    FOOTER = (
+        "\n\n**关注我们**\n\n"
+        "![](images/img_025.png)\n\n"
+        "华泰证券研究所国内站（研究Portal）\n\n"
+        "https://inst.htsc.com/research\n\n"
+        "访问权限：国内机构客户\n\n"
+        "免责声明\n\n"
+        "本公众号不是华泰证券研究报告的发布平台，所载内容不构成任何人的投资建议。\n"
+    )
+
+    def _body(self, n=120):
+        return "\n\n".join(
+            "### 小节 %d\n\n这是正文段落，讨论转债估值与条款，内容足够长以拉开页脚占比。" % i
+            for i in range(n))
+
+    def test_huatai_footer_is_trimmed(self):
+        t = self._body() + self.FOOTER
+        idx = m.find_promo_tail_heading(t)
+        self.assertNotEqual(-1, idx)
+        self.assertTrue(t[idx:].lstrip().startswith("**关注我们**"), t[idx:idx + 40])
+        self.assertIn("小节 119", t[:idx])
+        self.assertNotIn("免责声明", t[:idx])
+
+    def test_markdown_heading_form(self):
+        """`### 关注我们`（转换后/二次处理时的形态）也要认，且取更靠前的那个。"""
+        t = (self._body() + "\n\n### 关注我们\n\n![](images/qr.png)\n\nhttps://a.com\n\n"
+             "### 免责声明\n\n不构成投资建议。\n")
+        idx = m.find_promo_tail_heading(t)
+        self.assertNotEqual(-1, idx)
+        self.assertTrue(t[idx:].lstrip().startswith("### 关注我们"))
+
+    def test_self_written_disclaimer_is_kept(self):
+        """笔记自己写的「### 免责声明」+ 完成日期（无二维码/官网链接）不能被当页脚。
+
+        回归样本：`【001】思源电气_综合投资分析报告`（vault 实测误命中）。
+        """
+        t = (self._body() + "\n\n### 免责声明\n\n本报告仅为研究参考，不构成任何投资建议。\n\n"
+             "**报告完成日期**：2026年4月29日\n")
+        self.assertEqual(-1, m.find_promo_tail_heading(t))
+
+    def test_lone_heading_without_legal_is_kept(self):
+        """只有一句「关注我们」+ 一张图、没有任何法务文字 —— 不算页脚。"""
+        t = self._body() + "\n\n**关注我们**\n\n![](images/qr.png)\n"
+        self.assertEqual(-1, m.find_promo_tail_heading(t))
+
+    def test_heading_in_body_middle_is_kept(self):
+        """正文中段的「### 联系我们」不能当页脚（位置闸 65%）。"""
+        t = "### 联系我们\n\nhttps://example.com\n\n不构成投资建议。\n\n" + self._body(200)
+        self.assertEqual(-1, m.find_promo_tail_heading(t))

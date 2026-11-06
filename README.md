@@ -176,7 +176,7 @@ WECHAT_INDEX_PATTERN=*知识库索引*.md     # 索引页文件
 ## 测试
 
 ```bash
-python -m pytest tests/ -q -m "not e2e"          # 320 项（319 通过 + 1 跳过），无需网络
+python -m pytest tests/ -q -m "not e2e"          # 330 项（329 通过 + 1 跳过），无需网络
 python -m pytest tests/ -q -m e2e                # 联网 e2e（需浏览器运行时）
 python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/统计/配置那 244 项
 python scripts/tag_infer.py --self-test           # 标签词表自检
@@ -215,13 +215,15 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 
 ### 转换（`scripts/to_obsidian.py`）
 
-10. **文末推广截断有五条正交规则**，取命中位置**更靠前**的那个：
+10. **文末推广截断有六条正交规则**，取命中位置**更靠前**的那个：
     末尾 `---` 分隔线；文末标记行（关注公众号 / 扫描·长按二维码 / 推荐阅读 / 添加微信 /
     下载 APP / 原题：/ 作者·编辑署名 / 点击…阅读原文 / 本公众号所发布内容 / 点赞、转发 …）；
     `**END**` 结束标记（可挂结尾装饰图）；**历史文章导航区**（研报类文章末尾
     `**XX系列：**` + 200 条自家链接，篇幅可超过正文，靠「≥8 条连续 mp 链接」的**结构判据**
-    识别而非比例阈值）。
-    ⚠️ 比例闸（尾巴 ≤33% / 60%）**故意保留**：白皮书类文章**开头**的「扫描下方二维码」
+    识别而非比例阈值）；**标题式页脚**（`**关注我们**` / `### 免责声明` 这类整行就是标题的
+    固定页脚 —— 要求同一块里**法务文字与推广痕迹各有 ≥1 行**，只有法务文字的正文小节
+    不碰：`【001】思源电气` 那篇自己写的「### 免责声明」就是这么被排除的）。
+    ⚠️ 比例闸（尾巴 ≤33% / 40% / 60%）**故意保留**：白皮书类文章**开头**的「扫描下方二维码」
     占比可达 96%，去掉比例闸会把整篇腰斩。
 11. **文首引流块截断**（白皮书连载的「节选自《X》+ 扫码 + 添加助手 + 免费获取」），
     三个闸：起点在全文前 25% 内、块内 ≥2 个引流标记行、块内必须有索取诉求。
@@ -287,6 +289,9 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 29. **图片嵌入改写为 vault 全路径**：vault 开了 `alwaysUpdateLinks`，Obsidian 打开笔记就会
     把 `![[images/x.png]]` 改成 `![[公众号/标题/images/x.png]]`；落库时直接写对，
     免去「等它改」的空窗期（多篇 `img_001.png` 同名，相对写法在此之前是歧义的）。
+    **行尾也跟随 vault，不写死**：写盘前扫已有 `.md` 取主流行尾（按行数投票，点目录不计）。
+    本机实测 63 篇 CRLF / 8 篇 LF —— Obsidian 在 Windows 上存 CRLF，被 `update_index`
+    反复重写的索引页才是 LF。写死 LF 会让新笔记与全库不一致，`git diff` 整篇都算改动。
 
 ### 标签（`scripts/tag_infer.py`）
 
@@ -332,11 +337,11 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 
 ### 工程
 
-41. **320 项单测**（319 通过 + 1 跳过），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
+41. **330 项单测**（329 通过 + 1 跳过），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
 42. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
     跑一遍确认零命中；更严格的做法是用 `git show HEAD:<旧脚本>` 导出旧版，
     新旧各跑同一批文章两两 diff，把「本次改动的影响」与「上一批规则留下的差异」彻底分开。
-    （`references/pitfalls.md` 的 68 条记录大多就是这么发现并定位的。）
+    （`references/pitfalls.md` 的 70 条记录大多就是这么发现并定位的。）
 43. **配置与代码分离**：`scripts/env_config.py` 一个解析中心，纯标准库实现 `.env`
     （不引 python-dotenv），优先级「命令行 > 环境变量 > .env > 报错」。
     `scripts/setup_env.py` 负责生成 + 体检。新增配置项要同时改 `env_config.KEYS`、
@@ -366,7 +371,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 68 条踩坑记录（改脚本前必读）
+│   ├── pitfalls.md                  # 70 条踩坑记录（改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器：上游关系 / 本机 camoufox 结论
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档

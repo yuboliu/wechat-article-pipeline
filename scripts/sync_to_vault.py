@@ -95,6 +95,40 @@ def safe_name(title: str) -> str:
     return name.rstrip(". ")
 
 
+def detect_vault_eol(vault: Path, max_files: int = 80, max_bytes: int = 65536) -> str:
+    """探测 vault 里已有 .md 的主流行尾，返回 ``"\\r\\n"`` 或 ``"\\n"``。
+
+    为什么不能写死：旧版写死 ``newline="\\n"``，注释还写着「vault 既有笔记统一 LF」，
+    但 2026-11-06 实测本机 28 篇公众号笔记里 27 篇是 CRLF（Obsidian 在 Windows 上
+    保存的），只有最早一篇是 LF —— 新落库的笔记因此与全库不一致，`git diff` 和
+    OneDrive 版本比对时整篇都算「改动」（pitfalls #69）。
+
+    探测而不是猜：扫前 80 个非点目录下的 .md，按**行数**（不是文件数）取多者 ——
+    一篇长文比十篇短文更能代表库内习惯。一个样本都没有时按 Windows 惯例取 CRLF。
+    """
+    crlf = lf = 0
+    seen = 0
+    try:
+        for p in vault.rglob("*.md"):
+            if any(part.startswith(".") for part in p.relative_to(vault).parts):
+                continue
+            try:
+                data = p.read_bytes()[:max_bytes]
+            except OSError:
+                continue
+            n = data.count(b"\r\n")
+            crlf += n
+            lf += data.count(b"\n") - n
+            seen += 1
+            if seen >= max_files:
+                break
+    except (OSError, ValueError):
+        return "\r\n"
+    if crlf == 0 and lf == 0:
+        return "\r\n"
+    return "\r\n" if crlf >= lf else "\n"
+
+
 def create_note(vault: Path, title: str, content: str = "", folder: str = None,
                 tags: list = None) -> Path:
     """Create a new note，返回笔记路径。"""
@@ -109,9 +143,12 @@ def create_note(vault: Path, title: str, content: str = "", folder: str = None,
         fm["tags"] = tags
 
     full_content = format_frontmatter(fm) + content
-    # 显式 newline="\n"，避免 Windows 下 write_text 把 \n 翻成 \r\n（vault 既有笔记统一 LF）
-    with open(note_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(full_content)
+    # 行尾跟随 vault 现状（不写死）：先把内容归一成 LF，再整体翻成目标行尾。
+    # newline="" 关掉写入端的换行翻译，否则 "\r\n" 会被二次翻成 "\r\r\n"。
+    eol = detect_vault_eol(vault)
+    body = full_content.replace("\r\n", "\n").replace("\n", eol)
+    with open(note_path, "w", encoding="utf-8", newline="") as f:
+        f.write(body)
 
     return note_path
 

@@ -331,6 +331,81 @@ def find_promo_end(text):
     return -1
 
 
+# 「标题式」文末推广小节：`### 关注我们` / `## 免责声明` / `### 法律声明`。
+# 上面的 PROMO_TAIL_RE 认的是**行内句式**（「关注……公众号」「扫码」「点击阅读原文」），
+# 认不出「整行就是一个标题 + 两三个字」这种形态 —— 2026-11-06 华泰转债年度展望那篇的
+# 尾部（`### 关注我们` + 二维码 + 研究 Portal + 整段免责声明，32 行）因此整段漏网。
+# 只认**整行匹配**的短语：`### 关于我们的产品设计` 这类正文标题不会命中。
+# 三种外壳都要认：`**关注我们**`（抓取产物的原始形态）、`### 关注我们`（标题重建后）、
+# 以及裸行 `免责声明`（华泰那篇的免责声明既没加粗也不是标题）。
+PROMO_TAIL_HEAD_RE = re.compile(
+    r"^(?:#{1,6}\s*|\*{1,3})?"
+    r"(?:关注我们|关于我们|联系我们|扫码关注|欢迎关注"
+    r"|免责声明|法律声明|版权声明|重要声明|特别声明)"
+    r"\s*[:：]?\s*(?:\*{1,3})?\s*$",
+    re.IGNORECASE,
+)
+
+# 页脚的第二道闸：尾巴得真像页脚，而不是「正文最后一节恰好叫『联系我们』」。
+# 法务特征（强）：免责/版权/许可/不构成投资建议/访问权限 —— 正文段落几乎不会这么写。
+# 推广特征（弱）：URL、二维码、关注 —— 弱特征单独不算数，正文里随便一个链接就命中。
+PROMO_TAIL_LEGAL_RE = re.compile(
+    r"(?:免责声明|法律声明|版权|未经[^\n]{0,12}(?:许可|授权)"
+    r"|不构成[^\n]{0,24}投资建议|投资建议[^\n]{0,12}不"
+    r"|访问权限|滑动阅览)"
+)
+PROMO_TAIL_WEAK_RE = re.compile(r"(?:https?://|二维码|关注\s*我们)")
+PROMO_TAIL_HEAD_MIN_POS = 0.65      # 标记行必须落在全文 65% 之后
+PROMO_TAIL_HEAD_MAX_RATIO = 0.40    # 且它到文末不超过全文 40%（与 find_promo_sep 同口径）
+
+
+def find_promo_tail_heading(text):
+    """找「标题式」文末推广页脚的起点（字符下标），找不到返回 -1。
+
+    形态：`### 关注我们` + 二维码 + 官网/矩阵号链接 + 整段免责声明。券商研报、律所、
+    厂商公众号的固定页脚基本都是这个形状，常有 20-40 行。
+
+    四道闸，缺一不可：
+      1. **整行就是标题 + 短语**（PROMO_TAIL_HEAD_RE），不是含这几个字的正文句子；
+      2. 位置 ≥ 全文 65% —— 正文中段的「### 联系我们」章节不能被当页脚砍掉；
+      3. 尾巴 ≤ 全文 40% —— 与 find_promo_sep 同一口径，防开头就有「关注我们」的文章；
+      4. 尾巴里**法务特征 ≥1 行 且 推广特征 ≥1 行** —— 只有法务文字不算页脚。
+         这条是回归里撞出来的：`【001】思源电气` 那篇是笔记**自己写的**「### 免责声明」
+         （后面还跟着报告完成日期和相关笔记），只看法务特征会被整段咬掉。
+         真页脚一定有二维码/官网链接/「关注我们」这类**推广痕迹**。
+
+    从头往下扫，返回**第一个**合格位置（即最靠前的那个）：`### 关注我们` 通常排在
+    `### 免责声明` 之前，取靠前者才能把整块页脚一起带走。
+    """
+    lines = text.split("\n")
+    flags = fence_map(lines)
+    total = len(text)
+    starts, offset = [], 0
+    for ln in lines:
+        starts.append(offset)
+        offset += len(ln) + 1
+
+    for i, ln in enumerate(lines):
+        if flags[i] or not PROMO_TAIL_HEAD_RE.match(ln.strip()):
+            continue
+        if starts[i] < PROMO_TAIL_HEAD_MIN_POS * total:
+            continue
+        if total - starts[i] > PROMO_TAIL_HEAD_MAX_RATIO * total:
+            continue
+        legal = weak = 0
+        for l in lines[i:]:
+            s = l.strip()
+            if not s:
+                continue
+            if PROMO_TAIL_LEGAL_RE.search(s):
+                legal += 1
+            elif PROMO_TAIL_WEAK_RE.search(s):
+                weak += 1
+        if legal >= 1 and weak >= 1:
+            return starts[i]
+    return -1
+
+
 def _nav_link_only(s):
     """整行是否「几乎只由文章链接构成」——允许被 `**` 包住（导航列表常整行加粗）。"""
     if not MP_LINK_RE.search(s):
@@ -1619,6 +1694,9 @@ def convert(dir_name, base, tags, date_override=None, auto_tags=True, max_theme=
         n = find_promo_nav(text)
         if n != -1:
             cands.append((n, "历史文章导航区"))
+        h = find_promo_tail_heading(text)
+        if h != -1:
+            cands.append((h, "标题式推广页脚"))
         if cands:
             idx, why = min(cands, key=lambda c: c[0])
             notes.append("截断尾部推广（%s） %d 字符" % (why, len(text) - idx))
