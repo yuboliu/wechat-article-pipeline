@@ -9,6 +9,7 @@ Obsidian 在 Windows 上保存的笔记是 CRLF，而被 update_index 反复重�
 现在的行为是**探测已有笔记的主流行尾并跟随**，而不是写死也不是猜。
 """
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -74,6 +75,57 @@ class EolFollowTest(unittest.TestCase):
         self._seed("\r\n")
         p = sv.create_note(self.vault, "混合", "甲\r\n乙\n丙\n")
         data = p.read_bytes()
+        self.assertNotIn(b"\r\r\n", data)
+
+
+@unittest.skipIf(sv is None, "sync_to_vault 依赖未安装")
+class CliEolTest(unittest.TestCase):
+    """走**命令行主流程**验证行尾，而不是只调 create_note()。
+
+    这条是补漏：`create_note()` 改成跟随 vault 之后，主流程里还留着上一版
+    「写死 LF」时代的兜底归一化 —— 它紧跟着把刚写好的 CRLF 又改回 LF。
+    单测全绿（只测 create_note），真机落库却是 LF；2026-11-06 落【030】时才发现。
+    教训：**同一件事有两处实现时，测试必须覆盖真正上线的那个入口**。
+    """
+
+    FRONT = ("---\ncreated: '2026-11-06T00:00:00'\n"
+             "tags:\n- 主题/云原生/可观测性\n- 类型/趋势解读\n- 来源/微信公众号\n---\n\n")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        self.vault = root / "vault"
+        self.sub = self.vault / "【15】公众号"
+        self.sub.mkdir(parents=True)
+        (self.vault / ".obsidian").mkdir()
+        for i in range(3):                      # 全库 CRLF
+            (self.vault / ("n%d.md" % i)).write_bytes("甲\r\n乙\r\n".encode("utf-8"))
+
+        self.base = root / "output"
+        d = self.base / "测试标题"
+        d.mkdir(parents=True)
+        (d / "测试标题.obsidian.md").write_text(
+            self.FRONT + "# 测试标题\n\n## 一节\n\n正文一段。\n", encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_cli_writes_crlf_into_crlf_vault(self):
+        script = os.path.join(HERE, "..", "..", "scripts", "sync_to_vault.py")
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        r = subprocess.run(
+            [sys.executable, script, "测试标题",
+             "--base", str(self.base), "--vault", str(self.vault),
+             "--subfolder", "【15】公众号"],
+            capture_output=True, text=True, encoding="utf-8", env=env)
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+
+        notes = list(self.sub.glob("【001】测试标题/*.md"))
+        self.assertEqual(1, len(notes), "应落在 【001】测试标题/ 下：%s" % list(self.sub.iterdir()))
+        data = notes[0].read_bytes()
+        self.assertGreater(data.count(b"\r\n"), 0, "正文应跟随 vault 用 CRLF")
+        self.assertEqual(0, data.count(b"\n") - data.count(b"\r\n"),
+                         "不应残留裸 LF（主流程的兜底归一化会把它改回 LF）")
         self.assertNotIn(b"\r\r\n", data)
 
 

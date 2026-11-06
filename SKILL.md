@@ -163,6 +163,13 @@ D="<文章目录名>"                                      # output/ 下的子�
 > 层级信号（没有编号），硬编码规则一定会误伤别的文章。<br>
 > 判据：**打开大纲面板，若有同名项或明显该缩进而没缩进的节，就是要修**。
 
+> ⚠️ **尾部有两类东西脚本故意不管，落库前扫一眼**：
+> ① **文中 CTA** —— 「了解更多信息，请您扫码查看下方博客和资源」+ 二维码，如果它夹在
+> 正文和附录（「研究方法」「数据说明」）**之间**，文末推广规则会把附录一起砍掉，只能人工
+> 切中间那一段；② **「关于XX」厂商标尾** —— 公司介绍 + 商标声明 + 视频号 + 往期推荐，
+> 短语表里没有 `关于<公司名>`，且这类块的「法务特征」常常只有「商标」二字，四道闸过不了。
+> 详见 `references/pitfalls.md` #72。
+
 ## 3. 校验（落库门禁）
 
 ```bash
@@ -314,7 +321,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 70 条踩坑记录（动手改脚本前必读）
+│   ├── pitfalls.md                  # 72 条踩坑记录（动手改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器本机注意（camoufox 结论等）
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -330,7 +337,7 @@ wechat-article-pipeline/
 ## 测试与回归
 
 ```bash
-"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 330 项（329 通过 + 1 跳过），无需网络
+"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 331 项（330 通过 + 1 跳过），无需网络
 "$PY" -m pytest tests/ -q -m e2e              # 联网 e2e（需浏览器运行时）
 "$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 244 项
 "$PY" scripts/tag_infer.py --self-test         # 词表自检（结构 + 每个二级≥2 关键词）

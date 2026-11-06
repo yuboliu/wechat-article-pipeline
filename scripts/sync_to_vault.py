@@ -332,11 +332,6 @@ def main():
             print("  图片嵌入改写为 vault 全路径：%d 张" % n_img)
 
     note_path = create_note(vault, final_title, body, folder=folder, tags=tags)
-    # 保底：万一将来换回会翻 \n 的写入方式，这里统一回 LF，避免同批笔记出现两种换行符。
-    raw = note_path.read_bytes()
-    if b"\r\n" in raw:
-        note_path.write_bytes(raw.replace(b"\r\n", b"\n"))
-        print("  换行符归一化：CRLF -> LF")
     print("NOTE:", note_path)
     print("TAGS:", tags)
 
