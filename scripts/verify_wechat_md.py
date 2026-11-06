@@ -243,6 +243,12 @@ def check_image_count(text, images_dir, rep):
     embeds = re.findall(r"!\[\[(?:[^\]]*/)?images/([^\]]+)\]\]", text)
     n_embed = len(embeds)
     if not images_dir or not os.path.isdir(images_dir):
+        # 零引用且没有 images/ 目录是**正常**的：纯文本研报解读这类文章，图全是
+        # 二维码/装饰图，裁掉推广后一张都不剩（例：思科 Splunk 可观测性报告，2026-11-06）。
+        # 这种情况判 WARN 会让每一篇纯文本笔记都挂「建议人工过目」，把真正的告警淹掉。
+        if n_embed == 0:
+            rep.add("图片嵌入数 vs 文件数", PASS, ["本篇无图片引用，也没有 images/ 目录（正常）"])
+            return
         rep.add("图片嵌入数 vs 文件数", WARN,
                 [f"嵌入引用 {n_embed} 处；未找到 images 目录（{images_dir}），跳过文件比对"])
         return

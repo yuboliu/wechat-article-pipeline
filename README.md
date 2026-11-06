@@ -176,7 +176,7 @@ WECHAT_INDEX_PATTERN=*知识库索引*.md     # 索引页文件
 ## 测试
 
 ```bash
-python -m pytest tests/ -q -m "not e2e"          # 331 项（330 通过 + 1 跳过），无需网络
+python -m pytest tests/ -q -m "not e2e"          # 335 项（334 通过 + 1 跳过），无需网络
 python -m pytest tests/ -q -m e2e                # 联网 e2e（需浏览器运行时）
 python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/统计/配置那 244 项
 python scripts/tag_infer.py --self-test           # 标签词表自检
@@ -337,7 +337,7 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 
 ### 工程
 
-41. **331 项单测**（330 通过 + 1 跳过），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
+41. **335 项单测**（334 通过 + 1 跳过），全部离线可跑；CI 覆盖 Python 3.9 / 3.12。
 42. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
     跑一遍确认零命中；更严格的做法是用 `git show HEAD:<旧脚本>` 导出旧版，
     新旧各跑同一批文章两两 diff，把「本次改动的影响」与「上一批规则留下的差异」彻底分开。
@@ -371,7 +371,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 72 条踩坑记录（改脚本前必读）
+│   ├── pitfalls.md                  # 73 条踩坑记录（改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器：上游关系 / 本机 camoufox 结论
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档

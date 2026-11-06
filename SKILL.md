@@ -192,6 +192,9 @@ D="<文章目录名>"                                      # output/ 下的子�
 - `--strict` 把 WARN 也当 FAIL；`--images` 指定自定义图片目录。
 - 第 7 条同时认两种嵌入写法：`![[images/x.png]]`（转换产物）与 `![[公众号/标题/images/x.png]]`
   （落库并改写后的 vault 全路径）。只认前者会让落库后的成品「看起来零引用」。
+  **零引用且没有 `images/` 目录判 PASS**（纯文本类文章裁掉推广后可能一张图不剩，
+  落库时就不会建该目录）；有引用却找不到目录仍判 WARN —— 那才是真缺图。
+  这条口径是 2026-11-06 改的：旧逻辑下全库 72 篇里有 32 篇因此挂着 WARN，属于纯噪声。
 - 第 8 条只对**已带 frontmatter** 的文件生效（抓取产物没有 YAML 头，会自动跳过）。
   标签是质量项不是结构项，所以判 WARN 不拦落库。序列缩进两种形态（无缩进 / 2 空格）都认 ——
   `yaml.dump()` 写的是前者，Obsidian Linter 会重排成后者。
@@ -321,7 +324,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 72 条踩坑记录（动手改脚本前必读）
+│   ├── pitfalls.md                  # 73 条踩坑记录（动手改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器本机注意（camoufox 结论等）
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -337,7 +340,7 @@ wechat-article-pipeline/
 ## 测试与回归
 
 ```bash
-"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 331 项（330 通过 + 1 跳过），无需网络
+"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 335 项（334 通过 + 1 跳过），无需网络
 "$PY" -m pytest tests/ -q -m e2e              # 联网 e2e（需浏览器运行时）
 "$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 244 项
 "$PY" scripts/tag_infer.py --self-test         # 词表自检（结构 + 每个二级≥2 关键词）
