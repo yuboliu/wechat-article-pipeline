@@ -1630,6 +1630,53 @@ def normalize_heading_layout(lines):
     return out
 
 
+INDENT_MIN = 4
+
+# 「缩进本来就有语义」的行首 —— 这些行一律不动：
+#   无序列表 `- ` `* ` `+ ` / 有序列表 `1.` `1)` / 表格 `|` / 引用 `>` /
+#   图片嵌入 `![` / 标题 `## ` / 围栏 ``` / 分隔线 --- *** ___
+INDENT_KEEP_RE = re.compile(
+    r"^(?:[-*+][ \t]|\d+[.)][ \t]|\||>|!\[|#{1,6}[ \t]|```|-{3,}$|\*{3,}$|_{3,}$)"
+)
+
+
+def dedent_indented_paragraphs(text):
+    """把被 `text-indent:2em` 顶出 4 个空格的正文拉回行首（pitfalls #74）。
+
+    券商研报（华创 / 华泰）的正文段落几乎都带 `style="text-indent:2em"`，抓取后
+    就成了 4 个前导空格。CommonMark 里「**空行 + 4 空格起头**」是**缩进代码块** ——
+    这些段落进 Obsidian 会整段渲染成灰底等宽代码，而 Tier-1 八项检查全都只认
+    ``` 围栏，一条都拦不住（2026-11-27 实测一篇 22 段中招，评审时才发现）。
+
+    四道闸，缺一不可（回归见 tests/convert/test_dedent.py）：
+      1. **不在 ``` 围栏内** —— 围栏里的缩进是代码本身的语义；
+      2. **行首 ≥4 空格** —— 1~3 空格不构成缩进代码块，动了只会破坏软换行；
+      3. **去掉空格后不以「有缩进语义的行首」开头**（见 INDENT_KEEP_RE）——
+         缩进列表的嵌套子项、表格、引用都得保留缩进；
+      4. **它是块的开头** —— 上一非空行是空行，或上一行刚被本函数去过缩进。
+         缩进列表的续行、段落的软换行，上一行都不可能是空行，因此不会拆散它们。
+
+    返回 (新文本, 改动行数)。**只改渲染形态，不改变任何结构判定** —— 所以它放在
+    标题重建 / 推广截断全部跑完之后，避免缩进一去掉，某些加粗行就被提升成标题。
+    """
+    lines = text.split("\n")
+    flags = fence_map(lines)
+    out, changed, prev_blank, prev_dedented = [], 0, True, False
+    for i, ln in enumerate(lines):
+        body = ln.lstrip(" ")
+        pad = len(ln) - len(body)
+        if (not flags[i] and pad >= INDENT_MIN and body
+                and not INDENT_KEEP_RE.match(body)
+                and (prev_blank or prev_dedented)):
+            out.append(body)
+            changed += 1
+            prev_blank, prev_dedented = False, True
+        else:
+            out.append(ln)
+            prev_blank, prev_dedented = (ln.strip() == ""), False
+    return "\n".join(out), changed
+
+
 def infer_tags(title, body, notes, max_theme=3):
     """没给 --tags 时用 tag_infer 兜底推断三层标签。
 
@@ -1842,6 +1889,13 @@ def convert(dir_name, base, tags, date_override=None, auto_tags=True, max_theme=
     if fixed != text.split("\n"):
         notes.append("修标题行（去加粗 / 拆分粘连正文 / 版式归一）")
         text = "\n".join(fixed)
+
+    # 缩进段落误成代码块（pitfalls #74）。**放在最后**：上面所有结构判定（标题重建、
+    # 推广截断、假标题降级）都已按原缩进跑完，这一步只改渲染形态 —— 否则缩进一去掉，
+    # 原本靠缩进「躲过」标题识别的加粗行会被提升成标题，等于顺手改了文章结构。
+    text, dedent_n = dedent_indented_paragraphs(text)
+    if dedent_n:
+        notes.append("去缩进 %d 行（text-indent 残留会渲染成代码块）" % dedent_n)
 
     # 全文清理
     text = text.replace("\u200b", "")

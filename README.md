@@ -178,7 +178,7 @@ WECHAT_INDEX_PATTERN=*知识库索引*.md     # 索引页文件
 ```bash
 python -m pytest tests/ -q -m "not e2e"          # 335 项（334 通过 + 1 跳过），无需网络
 python -m pytest tests/ -q -m e2e                # 联网 e2e（需浏览器运行时）
-python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/统计/配置那 244 项
+python -m unittest discover -s tests/convert -v   # 只跑转换器/标签/索引/统计/配置那 286 项
 python scripts/tag_infer.py --self-test           # 标签词表自检
 ```
 
@@ -341,7 +341,7 @@ CI（`.github/workflows/ci.yml`）在 Python 3.9 / 3.12 上跑 `-m "not e2e"` �
 42. **假阳性回归方法论**：改标题 / 推广规则后，除单测外还要拿 vault 里**全部已落库成品**
     跑一遍确认零命中；更严格的做法是用 `git show HEAD:<旧脚本>` 导出旧版，
     新旧各跑同一批文章两两 diff，把「本次改动的影响」与「上一批规则留下的差异」彻底分开。
-    （`references/pitfalls.md` 的 70 条记录大多就是这么发现并定位的。）
+    （`references/pitfalls.md` 的 74 条记录大多就是这么发现并定位的。）
 43. **配置与代码分离**：`scripts/env_config.py` 一个解析中心，纯标准库实现 `.env`
     （不引 python-dotenv），优先级「命令行 > 环境变量 > .env > 报错」。
     `scripts/setup_env.py` 负责生成 + 体检。新增配置项要同时改 `env_config.KEYS`、
@@ -371,7 +371,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 73 条踩坑记录（改脚本前必读）
+│   ├── pitfalls.md                  # 74 条踩坑记录（改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器：上游关系 / 本机 camoufox 结论
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -380,7 +380,7 @@ wechat-article-pipeline/
 ├── tests/
 │   ├── test_core.py test_fetch.py   # 抓取器（pytest，61 项）
 │   ├── test_e2e_live.py             # 联网 e2e（默认跳过）
-│   └── convert/                     # 转换 / 标签 / 索引 / 统计 / 配置（unittest，244 项）
+│   └── convert/                     # 转换 / 标签 / 索引 / 统计 / 配置（unittest，286 项）
 └── .github/workflows/ci.yml
 ```
 

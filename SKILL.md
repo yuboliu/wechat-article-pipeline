@@ -152,7 +152,11 @@ D="<文章目录名>"                                      # output/ 下的子�
 9. 折叠「空章标题」；删除单行引流语（「后台+私信/回复…获取…资料/综述」）；
    「构成式」加粗行（`A + B + C`）不当标题，行尾标点被单独加粗（`**。**`）去壳；
 10. 标题行去加粗、补空行、`1.xxx` → `1. xxx`；加粗标记断裂合并、反斜杠残留还原、
-    中文引号成对归一化、目录块重排、**空表头补齐**（表头被写在 `<tbody>` 首行）、行尾清理。
+    中文引号成对归一化、目录块重排、**空表头补齐**（表头被写在 `<tbody>` 首行）、行尾清理；
+11. **去 `text-indent` 缩进**：券商研报正文常带 4 个前导空格（`text-indent:2em` 的残留），
+    在 CommonMark 里「空行 + 4 空格」就是缩进代码块，整段会渲染成灰底代码。
+    只对「围栏外 + ≥4 空格 + 不以列表/表格/引用/图片/标题开头 + 是块的开头」的行生效，
+    缩进列表、表格、引用、软换行一律不碰。放在**最后**跑，只改渲染形态、不改大纲（pitfalls #74）。
 
 每步命中都会在 stdout 打处理记录，便于复核。
 
@@ -324,7 +328,7 @@ wechat-article-pipeline/
 ├── references/
 │   ├── taxonomy.json                # ★三层标签词表（与索引页「一、标签体系」同步）
 │   ├── index_layout.json            # ★标签 → 索引段落/小组 的映射
-│   ├── pitfalls.md                  # 73 条踩坑记录（动手改脚本前必读）
+│   ├── pitfalls.md                  # 74 条踩坑记录（动手改脚本前必读）
 │   ├── verify_sop.md                # 校验 SOP：两层设计 / Tier-2 升级判据
 │   ├── fetch-notes.md               # 抓取器本机注意（camoufox 结论等）
 │   ├── CHANGELOG-local.md           # 转换脚本的历史改动留档
@@ -340,9 +344,9 @@ wechat-article-pipeline/
 ## 测试与回归
 
 ```bash
-"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 335 项（334 通过 + 1 跳过），无需网络
+"$PY" -m pytest tests/ -q -m "not e2e"        # 全部 348 项（347 通过 + 1 跳过），无需网络
 "$PY" -m pytest tests/ -q -m e2e              # 联网 e2e（需浏览器运行时）
-"$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 244 项
+"$PY" -m unittest discover -s tests/convert -v # 只跑转换器/标签/索引/配置那 286 项
 "$PY" scripts/tag_infer.py --self-test         # 词表自检（结构 + 每个二级≥2 关键词）
 "$PY" scripts/setup_env.py --check             # 配置体检（不含完整路径，可安全粘贴）
 "$PY" scripts/tag_stats.py --vault "<vault>"   # 标签体系计数干跑（有差异才需要 --apply）
